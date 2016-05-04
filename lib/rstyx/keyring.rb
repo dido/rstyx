@@ -1,0 +1,728 @@
+#!/usr/bin/ruby
+#
+# Author:: Rafael R. Sevilla (mailto:dido@imperium.ph)
+# Copyright:: Copyright (c) 2005-2007 Rafael R. Sevilla
+# Homepage:: http://rstyx.rubyforge.org/
+# License:: GNU Lesser General Public License / Ruby License
+#
+# $Id: keyring.rb 282 2007-09-19 07:26:50Z dido $
+#
+#----------------------------------------------------------------------------
+#
+# Copyright (C) 2005-2007 Rafael Sevilla
+# This file is part of RStyx
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of either 1) the GNU Lesser General Public License
+# as published by the Free Software Foundation; either version 3 of the
+# License, or (at your option) any later version; or 2) Ruby's license.
+#
+# See the file COPYING for complete licensing information
+#
+#----------------------------------------------------------------------------
+#
+# This is an implementation of the Inferno authentication protocol
+# (keyring). Adapted from the styx-n-9p Java code.
+#
+require 'openssl'
+require 'rstyx/errors'
+require 'digest/sha1'
+
+module RStyx
+  module Keyring
+    MAX_MSG = 4096
+
+    ##
+    # Convert a big-endian byte string _str_ into a bignum.
+    #
+    def self.str2big(str)
+      val = 0
+      str.each_byte do |b|
+        val = val*256 + b
+      end
+      return(val)
+    end
+
+    ##
+    # Convert a big-endian, base64-encoded byte string _str2_ into a bignum
+    #
+    def self.s2big(str2)
+      str = str2.unpack("m")[0]
+      return(str2big(str))
+    end
+
+    ##
+    # Convert a bignum _val_ into a big-endian base64-encoded byte string
+    #
+    def self.big2s(val)
+      str = ""
+      while val > 0
+        c = val % 256
+        str = c.chr + str
+        val = val / 256
+      end
+      # Force leading 0 byte for compatibility with older representation
+      # See libinterp/keyring.c function bigtobase64.
+      if str.length != 0 && ((str[0] & 0x80) != 0)
+        str = "\0" + str
+      end
+      str = [str].pack("m")
+      # Ruby will add newlines into the Base64 representation.  Remove
+      # them; they're useless.
+      str.tr!("\n", "")
+      return(str)
+    end
+
+    ##
+    # Modular exponentiation.  Computes _b_^_e_ mod _m_ using the square
+    # and multiply method.
+    #
+    def self.mod_exp(b, e, m)
+      res = 1
+      while e > 0
+        if e[0] == 1
+          res = (res * b) % m
+        end
+        e >>= 1
+        b = (b*b) % m
+      end
+      return(res)
+    end
+
+    ##
+    # Determine the size of _i_ in bits.
+    #
+    def self.bit_size(i)
+      hibit = i.size * 8 - 1
+      while (i[hibit] == 0)
+        hibit -= 1
+        break if hibit < 0
+      end
+
+      return(hibit + 1)
+    end
+
+    ##
+    # Generate a random number between p and q.  Uses OpenSSL::Random to
+    # generate the random number.
+    #
+    def self.randpq(p, q)
+      if p > q
+        t = p
+        p = q
+        q = t
+      end
+      diff = q - p
+      if diff < 2
+        raise RuntimeError.new("range must be at least two")
+      end
+      l = Keyring.bit_size(diff)
+      t = 1 << l
+      l = (l + 7) & ~7          # nearest byte
+      slop = t % diff
+      r = -1
+      while r < slop
+        buf = OpenSSL::Random.random_bytes(l)
+        r = 0
+        buf.each_byte do |b|
+          r = r*256 + b
+        end
+      end
+      return((r % diff) + p)
+    end
+
+    ##
+    # Get a message from _fd_.  A message is defined as a four-digit
+    # number (representing the size), followed by a newline, followed by
+    # a number of bytes equal to the number.  The number may be preceded
+    # by an exclamation point, in which the data becomes the message sent
+    # as a RemoteAuthErr exception's error text.
+    #
+    def self.getmsg(fd)
+      num = fd.read(5)
+      if num[4..4] != "\n"
+        raise IOError.new("bad message syntax")
+      end
+
+      iserr = false
+      i = nil
+      n = 0
+      if num[0..0] == '!'
+        iserr = true
+        n = num[1,3].to_i
+      else
+        n = num.to_i
+      end
+
+      if n < 0 || n > MAX_MSG
+        raise IOError.new("message syntax")
+      end
+      z = fd.read(n)
+      if iserr
+        raise RemoteAuthErr.new(z)
+      end
+      return(z)
+    end
+
+    ##
+    # Send a message to _fd_, prefixed by a four-digit zero-padded size.
+    #
+    def self.sendmsg(fd, data)
+      fd.printf("%04d\n", data.length)
+      fd.write(data)
+    end
+
+    ##
+    # Send an error message to _fd_, prefixed by a ! and a three digit
+    # size.
+    #
+    def self.senderrmsg(fd, data)
+      fd.printf("!%03d\n", data.length)
+      fd.write(data)
+    end
+
+    ##
+    # An Inferno public key.
+    #
+    class InfPublicKey
+      ##
+      # The actual public key, as an OpenSSL::PKey::RSA object
+      #
+      attr_accessor :pk
+      ##
+      # The owner of the public key
+      #
+      attr_accessor :owner
+
+      ##
+      # Create a new Inferno public key, given the OpenSSL
+      # public key and the owner
+      #
+      def initialize(pk, owner)
+        @pk = pk
+        @owner = owner
+      end
+
+      ##
+      # Create a new public key, given a public key record string such
+      # as might be read from an Inferno keyring file.
+      #
+      def self.from_s(s)
+        a = s.split("\n")
+        if a.length < 4
+          raise InvalidKeyException.new("bad public key syntax")
+        end
+
+        if a[0] != "rsa"
+          raise InvalidKeyException.new("unknown key algorithm #{a[0]}")
+        end
+
+        n = Keyring.s2big(a[2])
+        e = Keyring.s2big(a[3])
+        pk = OpenSSL::PKey::RSA.new
+        pk.n = n
+        pk.e = e
+        return(InfPublicKey.new(pk, a[1]))
+      end
+
+      ##
+      # Return the public key information as a string suitable for writing
+      # as a protocol message or in the Inferno keyfile format.
+      def to_s
+        str = <<EOS
+rsa
+#{@owner}
+#{Keyring.big2s(@pk.n.to_i)}
+#{Keyring.big2s(@pk.e.to_i)}
+EOS
+        return(str)
+      end
+    end
+
+    ##
+    # An Inferno private key.
+    #
+    class InfPrivateKey
+      ##
+      # The private (secret) key as an  OpenSSL::PKey::RSA object
+      #
+      attr_accessor :sk
+      ##
+      # The owner of the private key
+      #
+      attr_accessor :owner
+
+      ##
+      # Create a new Inferno private key, given the OpenSSL
+      # private key and the owner
+      #
+      def initialize(sk, owner)
+        @sk = sk
+        @owner = owner
+      end
+
+      ##
+      # Create a new private key, given a private key record string such
+      # as might be read from an Inferno keyring file.
+      #
+      def self.from_s(s)
+        a = s.split("\n")
+        if a.length < 10
+          raise InvalidKeyException.new("bad private key syntax")
+        end
+
+        if a[0] != "rsa"
+          raise InvalidKeyException.new("unknown key algorithm #{a[0]}")
+        end
+
+        # Mind your p's and q's: libsec's p is OpenSSL's q!  OpenSSL follows
+        # PKCS#1 in reversing their roles.  We need to reverse p and q, and
+        # dmp1 and dmq1 to use OpenSSL, but here we do everything in pure
+        # Ruby as much as we can.
+        sk = OpenSSL::PKey::RSA.new
+        sk.n = Keyring.s2big(a[2])
+        sk.e = Keyring.s2big(a[3])
+        sk.d = Keyring.s2big(a[4])
+        sk.p = Keyring.s2big(a[5])
+        sk.q = Keyring.s2big(a[6])
+        sk.dmp1 = Keyring.s2big(a[7])
+        sk.dmq1 = Keyring.s2big(a[8])
+        sk.iqmp = Keyring.s2big(a[9])
+        return(InfPrivateKey.new(sk, a[1]))
+      end
+
+      ##
+      # Get the public key information from the private key, which
+      # is basically just n and p
+      def getpk
+        pk = OpenSSL::PKey::RSA.new
+        pk.n = @sk.n
+        pk.e = @sk.e
+        return(InfPublicKey.new(pk, @owner))
+      end
+
+      ##
+      # Return the private key information as a string suitable for writing
+      # as a protocol message or in the Inferno keyfile format.
+      def to_s
+        str = <<EOS
+rsa
+#{@owner}
+#{Keyring.big2s(@sk.n.to_i)}
+#{Keyring.big2s(@sk.e.to_i)}
+#{Keyring.big2s(@sk.d.to_i)}
+#{Keyring.big2s(@sk.p.to_i)}
+#{Keyring.big2s(@sk.q.to_i)}
+#{Keyring.big2s(@sk.dmp1.to_i)}
+#{Keyring.big2s(@sk.dmq1.to_i)}
+#{Keyring.big2s(@sk.iqmp.to_i)}
+EOS
+        return(str)
+      end
+
+    end
+
+    ##
+    # An Inferno certificate.
+    #
+    class Certificate
+      ##
+      # Signature algorithm
+      #
+      attr_accessor :sa
+      ##
+      # Hash algorithm
+      attr_accessor :ha
+      ##
+      # Name of signer
+      attr_accessor :signer
+      ##
+      # Expiration date
+      #
+      attr_accessor :exp
+      ##
+      # The signature data itself
+      #
+      attr_accessor :rsa
+
+      ##
+      # Create a new certificate instance given the signature algorithm
+      # _sa_, the hash algorithm _ha_, the signer name _signer_, the
+      # expiration date _exp_ and the signature data _rsa_.
+      #
+      def initialize(sa, ha, signer, exp, rsa)
+        @sa = sa
+        @ha = ha
+        @signer = signer
+        @exp = exp
+        @rsa = rsa
+      end
+
+      ##
+      # Create a new Certificate, given a certificate record string such
+      # as might be read from an Inferno keyring file.
+      #
+      def self.from_s(s)
+        a = s.split("\n")
+        if a.length < 5
+          raise InvalidCertificateException.new("bad certificate syntax")
+        end
+
+        sa = a[0]
+        ha = a[1]
+        signer = a[2]
+        exp = a[3].to_i
+        rsa = Keyring.s2big(a[4])
+        return(Certificate.new(sa, ha, signer, exp, rsa))
+      end
+
+      ##
+      # Return the certificate information as a string suitable for writing
+      # as a protocol message or in the Inferno keyfile format.
+      def to_s
+        str = <<EOS
+#{@sa}
+#{@ha}
+#{@signer}
+#{@exp}
+#{Keyring.big2s(@rsa)}
+EOS
+        return(str)
+      end
+    end
+
+    ##
+    # Inferno authentication information data
+    class Authinfo
+      ##
+      # My private (secret) key
+      attr_accessor :mysk
+      ##
+      # My public key
+      attr_accessor :mypk
+      ##
+      # Signature of my public key
+      attr_accessor :cert
+      ##
+      # Signer's public key
+      attr_accessor :spk
+      ##
+      # Diffie-Hellman p (prime number)
+      attr_accessor :p
+      ##
+      # Diffie-Hellman alpha (generator of Z_p)
+      attr_accessor :alpha
+
+      def initialize(sk, pk, cert, spk, alpha, p)
+        @mysk = sk
+        @mypk = pk
+        @cert = cert
+        @spk = spk
+        @alpha = alpha
+        @p = p
+      end
+
+      ##
+      # Read authentication information from an IO instance _fd_.
+      # This returns an Authinfo instance initialized with the
+      # information read from the file.
+      #
+      def self.readauthinfo(fd)
+        spk = InfPublicKey.from_s(Keyring.getmsg(fd))
+        cert = Certificate.from_s(Keyring.getmsg(fd))
+        mysk = InfPrivateKey.from_s(Keyring.getmsg(fd))
+        alpha = Keyring.s2big(Keyring.getmsg(fd))
+        p = Keyring.s2big(Keyring.getmsg(fd))
+        return(Authinfo.new(mysk, mysk.getpk, cert, spk, alpha, p))
+      end
+
+    end
+
+    ##
+    # Perform the Inferno authentication protocol, reading messages
+    # from and writing messages to _fd_, given the authentication
+    # information object _info_.
+    #
+    def self.basicauth(fd, info)
+      secret = peerauth = nil
+      begin
+        # 1. Version negotiation
+        sendmsg(fd, "1")
+        buf = Keyring.getmsg(fd)
+        vers = buf.to_i
+        
+        # 2. Check version
+        if vers != 1 || buf.length > 4
+          raise LocalAuthErr.new("incompatible authentication protocol")
+        end
+
+        if info.nil?
+          raise LocalAuthErr.new("no authentication information")
+        end
+
+        if info.p.nil?
+          raise LocalAuthErr.new("missing diffie hellman mod")
+        end
+
+        if info.alpha.nil?
+          raise LocalAuthErr.new("missing diffie hellman base")
+        end
+
+        if info.mysk.nil? || info.mypk.nil? || info.cert.nil? || info.spk.nil?
+          raise LocalAuthErr.new("invalid authentication information")
+        end
+
+        if info.p <= 0
+          raise LocalAuthErr.new("negative modulus")
+        end
+        # 3. Diffie-Hellman authentication protocol.
+        low = info.p >> (Keyring.bit_size(info.p) / 4)
+        r0 = Keyring.randpq(low, info.p)
+        alphar0 = mod_exp(info.alpha, r0, info.p)
+        sendmsg(fd, Keyring.big2s(alphar0))
+        sendmsg(fd, info.cert.to_s)
+        sendmsg(fd, info.mypk.to_s)
+        # 4. Receive peer's alpha**r1 mod p and the peer's certificate
+        #    and public key.
+        alphar1 = Keyring.s2big(Keyring.getmsg(fd))
+        if info.p <= alphar1
+          raise LocalAuthErr.new("implausible parameter value")
+        end
+
+        if alphar0 == alphar1
+          raise LocalAuthErr.new("possible replay attack")
+        end
+        # 5. Verify the authenticity of the peer's certificate.
+        hiscert = Certificate.from_s(getmsg(fd))
+        hispkbuf = getmsg(fd)
+        hispk = InfPublicKey.from_s(hispkbuf)
+        unless verify(info.spk, hiscert, hispkbuf)
+          raise LocalAuthErr.new("pk doesn't match certificate")
+        end
+        if hiscert.exp != 0 && (Time.at(hiscert.exp) <= Time.now)
+          raise LocalAuthErr.new("certificate expired")
+        end
+
+        # 6. Send a certificate to the peer with alpha**r0 mod p and
+        # alpha**r1 mod p.
+        alphabuf = Keyring.big2s(alphar0) + Keyring.big2s(alphar1)
+        alphacert = sign(info.mysk, 0, alphabuf)
+        sendmsg(fd, alphacert.to_s)
+
+        # 7. Receive the peer's certificate
+        alphacert = Certificate.from_s(getmsg(fd))
+        alphabuf = Keyring.big2s(alphar1) + Keyring.big2s(alphar0)
+        # 8. Verify the certificate from the peer
+        unless verify(hispk, alphacert, alphabuf)
+          raise LocalAuthErr.new("signature did not match pk")
+        end
+
+        # alpha0r1 is the shared secret
+        alpha0r1 = mod_exp(alphar1, r0, info.p)
+        secret = ""
+        val = alpha0r1
+        while val > 0
+          c = val % 256
+          secret << c.chr
+          val = val / 256
+        end
+        # Remove any leading nulls
+        secret =~ /\0*(.*)/
+        secret = $1
+        peerauth = Authinfo.new(nil, hispk, hiscert, info.spk, info.alpha,
+                                info.p)
+        # 9. Send a protocol message containing OK back to the client.
+        sendmsg(fd, "OK")
+      rescue IOError => e
+        raise LocalAuthErr.new("I/O error: #{e.message}")
+      rescue InvalidCertificateException => e
+        senderrmsg(fd, "remote: #{e.message}")
+        raise e
+      rescue InvalidKeyException => e
+        senderrmsg(fd, "remote: #{e.message}")
+        raise e
+      rescue NoSuchAlgorithmException => e
+        senderrmsg(fd, "remote: unsupported algorithm: #{e.message}")
+        raise e
+      rescue LocalAuthErr => e
+        senderrmsg(fd, "remote: #{e.message}")
+        raise e
+      rescue RemoteAuthErr => e
+        senderrmsg(fd, "missing your authentication data")
+        raise AuthenticationException.new(e.message)
+      end
+
+      begin
+        # 10. Receive an OK from the peer.
+        until /OK/ =~ getmsg(fd)
+        end
+      rescue Exception => e
+        raise AuthenticationException.new("i/o error: #{e.message}")
+      end
+      return([peerauth, secret])
+    end
+
+    ##
+    # Set cryptographic algorithms in use, given a connection object _fd_
+    # a role _role_ (which may be :client or :server), and a list of
+    # algorithms.  Only the first algorithm listed is in use.  This is
+    # a stub until we can figure out exactly how Inferno does cryptographic
+    # protocol negotiation.
+    #
+    def self.setlinecrypt(fd, role, algs)
+      if role == :client
+        if (!algs.nil? && algs.length > 0)
+          alg = algs[0]
+        else
+          alg = "none"          # we need to either figure out how to use SSL without its handshake or write our own code to do cryptography manually.
+        end
+        sendmsg(fd, alg)
+      elsif role == :server
+        alg = self.getmsg(fd)
+        if alg != "none"
+          raise IOError.new("unsupported algorithm: " + alg)
+        end
+      else
+        raise IOException.new("invalid role #{role.to_s}")
+      end
+      return(alg)
+    end
+
+    ##
+    # Perform mutual authentication over a network connection _fd_.
+    # The _role_ is the role of the connection, which may be either
+    # of the symbols :client or :server, _info_ holds an Authinfo
+    # object containing this peer's authentication information, and
+    # _algs_ the bulk encryption algorithms supported by this peer.
+    # See Inferno's keyring-auth(2) for more details on how this
+    # should work.
+    #
+    def self.auth(fd, role, info, algs)
+      res = basicauth(fd, info)
+      setlinecrypt(fd, role, algs)
+      return(res)
+    end
+
+    ##
+    # Perform RSA encryption given a (public or private) key _pk_ and
+    # plaintext _data_ represented as a BigInteger.  Returns the RSA
+    # ciphertext as a BigInteger
+    #
+    def self.rsaencrypt(pk, data)
+      return(mod_exp(data, pk.e.to_i, pk.n.to_i))
+    end
+
+    ##
+    # Perform RSA decryption given a private key _sk_ and ciphertext
+    # _data_.
+    #
+    def self.rsadecrypt(sk, data)
+      p = sk.p.to_i
+      v1 = data % p
+      q = sk.q.to_i
+      v2 = data % q
+      v1 = mod_exp(v1, sk.dmp1.to_i, p)
+      v2 = mod_exp(v2, sk.dmq1.to_i, q)
+      return((((v2 - v1)*sk.iqmp) % q)*p + v1)
+    end
+
+    ##
+    # Verify an RSA signature, given the hash _m_, the signature data _sig_,
+    # and the signer public key _key_.
+    #
+    def self.rsaverify(m, sig, key)
+      return(rsaencrypt(key, sig) == m)
+    end
+
+    ##
+    # Verify a certificate _c_ given the public key of the signer _pk_, and
+    # the actual data of the certificate _a_.
+    #
+    def self.verify(pk, c, a)
+      # Check if the certificate algorithm is supported.  At the moment
+      # only RSA signatures over SHA-1 are supported.
+      unless c.sa == "rsa" && (c.ha == "sha1" || c.ha == "sha")
+        return(false)
+      end
+      sha1 = Digest::SHA1.new
+      sha1.update(a)
+      sha1.update("#{c.signer} #{c.exp}")
+      val = str2big(sha1.digest)
+      return(rsaverify(val, c.rsa, pk.pk))
+    end
+
+    ##
+    # Sign a certificate, given a private key _sk_, an expiration time
+    # _exp_ in seconds from the Epoch, and the data to sign _a_.
+    #
+    def self.sign(sk, exp, a)
+      sha1 = Digest::SHA1.new
+      sha1.update(a)
+      sha1.update("#{sk.owner} #{exp}")
+      digest = str2big(sha1.digest)
+      sig = rsadecrypt(sk.sk, digest)
+      return(Certificate.new("rsa", "sha1", sk.owner, exp, sig))
+    end
+
+    ##
+    # A connection wrapper, which provides read and write methods
+    # just like a socket, given a connection object.
+    #
+    class FileWrapper
+      attr_accessor :data
+      ##
+      # Create a new FileWrapper, given an EventMachine connection
+      # object.
+      #
+      def initialize(conn)
+        @conn = conn
+        @data = ""
+        @datalock = Mutex.new
+        @dcondvar = ConditionVariable.new
+      end
+
+      ##
+      # Write data to the connection
+      #
+      def write(data)
+        @conn.send_data(data)
+      end
+
+      ##
+      # Read data from the connection
+      #
+      def read(length)
+        @datalock.synchronize do
+          while @data.length < length
+            @dcondvar.wait(@datalock)
+          end
+          retval, rest = @data.unpack("a#{length}a*")
+          @data = rest
+          return(retval)
+        end
+      end
+
+      ##
+      # Add data received from the connection here
+      #
+      def <<(str)
+        @datalock.synchronize do
+          @data << str
+          @dcondvar.signal
+        end
+      end
+
+      ##
+      # Print data to the connection
+      #
+      def printf(str, *args)
+        str = sprintf(str, *args)
+        write(str)
+      end
+    end
+
+
+
+  end
+
+end
