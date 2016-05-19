@@ -376,7 +376,7 @@ module RStyx
         if len.nil? || len > origlength
           raise StyxException.new("message string too short: #{len} bytes expected, only #{origlength} available")
         end
-        c = MESSAGE_IDS.index(ident)
+        c = MESSAGE_IDS.key(ident)
         if c.nil?
           raise StyxException.new("Unknown message type identifier #{ident.inspect}")
         end
