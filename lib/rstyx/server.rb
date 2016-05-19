@@ -82,6 +82,9 @@ module RStyx
       ##
       # Shared secret obtained during Inferno authentication
       attr_accessor :secret
+      ##
+      # Peer name
+      attr_reader :peername
 
       DEFAULT_MSIZE = 8216
 
@@ -1092,7 +1095,7 @@ module RStyx
               conn.session.user = "nobody"
               conn.session.auth = false
               conn.authenticator = nil
-              @log.info("unauthenticated connection for #{conn.username}")
+              @log.info("unauthenticated connection for #{conn.peername}")
             end
             conn.session.groups = @groups
           end
@@ -1670,7 +1673,7 @@ module RStyx
       # implementation does nothing; subclasses must override this to
       # provide the correct functionality.
       #
-      def refresh(update_children)
+      def refresh(update_children=false)
       end
     end                         # class SFile
 
@@ -1989,7 +1992,7 @@ module RStyx
 
       ##
       # Refreshes the file's stat information based on a real stat call
-      def refresh
+      def refresh(update_children=false)
         s = File.stat(@path)
         @mtime = s.mtime
         @atime = s.atime
