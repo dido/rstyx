@@ -31,7 +31,7 @@ information:
    key which is recognized by the entire system as a whole.
 4. The certificate signer's public key.
 5. Diffie-Hellman parameters in common use throughout the system (a
-   large prime number p and a generator of the Galois group Z_p used
+   large prime number p and a generator of the Galois group Z<sub>p</sub> used
    in the Diffie-Hellman protocol.
 
 Each of these five pieces of data is stored in a file in the format of
@@ -62,7 +62,7 @@ RSA secret (private) keys are represented as follows:
 6. the secret prime factor q
 7. the prime exponent d mod (p-1)
 8. the prime exponent d mod (q-1)
-9. the coefficient q^-1 mod p
+9. the coefficient q<sup>-1</sup> mod p
 
 It is to be noted that Inferno's libsec reverses the roles of p and q,
 compared to PKCS#1-compliant implementations such as OpenSSL and
@@ -97,28 +97,31 @@ Diffie-Hellman parameters are represented as follows:
 3. If the version negotiation has successfully taken place, the
    participant uses the Diffie-Hellman station to station protocol to
    perform authentication.  The participant generates a random secret
-   r0, computes alpha**r0 mod p, and sends this, followed by its
-   certificate and its public key, to its peer.
-4. The participant then receives from the peer its own value alpha**r1
-   mod p and the peer's certificate and public key.
+   r<sub>0</sub>, computes alpha<sup>r<sub>0</sub></sup> mod p, and
+   sends this, followed by its certificate and its public key, to its
+   peer.
+4. The participant then receives from the peer its own value
+   alpha<sup>r<sub>1</sub></sup> mod p and the peer's certificate and
+   public key.
 5. The participant verifies the authenticity of the peer's
    certificate.
 6. The participant sends a certificate to the peer signed using its
-   own private key consisting of alpha**r0 mod p followed by alpha**r1
+   own private key consisting of alpha<sup>r<sub>0</sub></sup> mod p
+   followed by alpha<sup>r<sub>1</sub></sup>
    mod p.
 7. The peer sends a certificate to the participant signed using its
-   own private key consisting of alpha**r1 mod p followed by alpha**r0
-   mod p.
+   own private key consisting of alpha<sup>r<sub>1</sub></sup> mod p
+   followed by alpha<sup>r<sub>0</sub></sup> mod p.
 8. The participant verifies that the certificate sent by the peer can
    be decrypted using the peer's public key, and the resulting hash
-   matches with the hash of alpha**r1 mod p followed by alpha**r0
-   mod p.
+   matches with the hash of alpha<sup>r<sub>1</sub></sup> mod p
+   followed by alpha<sup>r<sub>0</sub></sup> mod p.
 9. If the verification is successful, the participant sends a protocol
    message containing 'OK' to the peer.
 10. The peer should also send an OK back to the client.
 
 At this point, both participant and peer share the secret
-alpha**(r0*r1), which may be used for further communication.
+alpha<sup>r<sub>0</sub>r<sub>1</sub></sup>, which may be used for further communication.
 
 ## Cryptography ##
 
