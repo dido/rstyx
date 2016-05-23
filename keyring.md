@@ -1,5 +1,5 @@
 
-= Inferno's Keyring Authentication Protocol
+# Inferno's Keyring Authentication Protocol
 
 Since I don't seem to have seen the Inferno authentication protocol
 documented fully anywhere else, I think I ought to write up what I've
@@ -7,7 +7,7 @@ learned about it here, from reading both the Inferno manual pages
 and some of the source code (which is fragmented and confusing) and
 Charles Forsyth's styx-n-9p code.
 
-== Protocol Messages
+## Protocol Messages ##
 
 The authentication protocol sends data over the wire using UTF-8 text
 only; any binary data such as key information must first be encoded as
@@ -20,7 +20,7 @@ represented as a four-digit zero padded number, followed by a newline
 Error messages result with the byte length limited to three digits,
 and prefixed with an exclamation point.
 
-== Authentication information
+## Authentication information ##
 
 The authentication information for a user consists of the following
 information:
@@ -84,7 +84,7 @@ Diffie-Hellman parameters are represented as follows:
 1. The prime modulus p of the Diffie-Hellman system
 2. The generator g (called alpha in libsec and styx-n-9p)
 
-== Protocol Flow
+## Protocol Flow ##
 
 1. On connecting, each peer first sends the version number of the
    protocol it understands as a protocol message.  The version number
@@ -120,7 +120,7 @@ Diffie-Hellman parameters are represented as follows:
 At this point, both participant and peer share the secret
 alpha**(r0*r1), which may be used for further communication.
 
-== Cryptography
+## Cryptography ##
 
 A client may then send an encryption/digest algorithm descriptor for
 further use of the connection, which is then encrypted using SSL.
@@ -128,5 +128,3 @@ Usually 'none' is used here.
 
 An encrypted connection uses the SSLv2/TLS record layer protocol (but
 not the SSL handshaking protocol).
-
-$Id: keyring.txt 262 2007-09-18 05:15:21Z dido $
