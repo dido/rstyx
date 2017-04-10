@@ -414,7 +414,7 @@ module RStyx
           when "Stat"
             # See the corresponding comments under to_bytes
             # (from when "Stat") for why we do it this way.
-            slen1 = str.unpack("v")
+            slen1 = str.unpack("v").first
             slen1, stat, str = str.unpack("va#{slen1}a*")
             val = Stat.from_bytes(stat)
           when "ULongLong"
@@ -436,7 +436,7 @@ module RStyx
       #           subclass instance.
       #
       def to_bytes
-        str = ""
+        str = "".force_encoding("ASCII-8BIT")
         self.class.fields.each do |name,type|
           case type
           when "Cstr"
