@@ -428,6 +428,8 @@ module RStyx
             create = true
           when "e"
             numeric_mode = OEXEC
+          else
+            raise StyxException.new("invalid access mode #{mode}")
           end
         end
 
