@@ -25,14 +25,6 @@
 #
 
 module RStyx
-  module Version
-
-    MAJOR = 0
-    MINOR = 4
-    TINY = 2
-
-    # The version of RStyx in use.
-    STRING = [ MAJOR, MINOR, TINY ].join(".")
-  end
+  VERSION = "0.4.2"
 end
 

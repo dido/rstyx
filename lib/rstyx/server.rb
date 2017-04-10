@@ -1,15 +1,13 @@
 #!/usr/bin/ruby
 #
 # Author:: Rafael R. Sevilla (mailto:dido@imperium.ph)
-# Copyright:: Copyright (c) 2005-2007 Rafael R. Sevilla
-# Homepage:: http://rstyx.rubyforge.org/
+# Copyright:: Copyright (c) 2005-2016 Rafael R. Sevilla
+# Homepage:: https://github.com/dido/rstyx
 # License:: GNU Lesser General Public License / Ruby License
-#
-# $Id: server.rb 302 2007-09-24 03:01:10Z dido $
 #
 #----------------------------------------------------------------------------
 #
-# Copyright (C) 2005-2007 Rafael Sevilla
+# Copyright (C) 2005-2016 Rafael Sevilla
 # This file is part of RStyx
 #
 # This program is free software; you can redistribute it and/or modify
@@ -51,6 +49,142 @@ require 'rstyx/errors'
 
 module RStyx
   module Server
+    ##
+    # Message receiving module for the Styx server.  The module will
+    # assemble all inbound messages and send them to a provided
+    # 
+    #
+    module StyxServerProtocol
+      ##
+      # maximum message size supported
+      attr_accessor :msize
+      ##
+      # Logger object used for logging server events
+      attr_accessor :log
+      ##
+      # An authenticator which is sent messages received from the client.
+      # Used when doing Inferno authentication.
+      attr_accessor :authenticator
+      ##
+      # The session object corresponding to this connection
+      attr_accessor :session
+      ##
+      # Server's authentication information
+      attr_accessor :myauth
+      ##
+      # Connected peer's authentication information
+      attr_accessor :userauth
+      ##
+      # Shared secret obtained during Inferno authentication
+      attr_accessor :secret
+      ##
+      # Peer name
+      attr_reader :peername
+
+      DEFAULT_MSIZE = 8216
+
+      def post_init
+        @msize = DEFAULT_MSIZE
+        # Buffer for messages received from the client
+        @msgbuffer = ""
+        # Session object for this session
+        @session = Session.new(self)
+        # Conveniences to allow the logger and root to be
+        # more easily accessible from within the mixin.
+        # Try to get the peername if available
+        pname = get_peername()
+        # XXX - We should be using unpack_sockaddr_un for
+        # Unix domain sockets...
+        if pname.nil?
+          @peername = "(unknown peer)"
+        else
+          port, host = Socket.unpack_sockaddr_in(pname)
+          @peername = "#{host}:#{port}"
+        end
+      end
+
+      ##
+      # Send a reply back to the peer
+      def reply(msg, tag)
+        # Check if the tag is still available.  If it has been
+        # flushed, don't send the reply.
+        if @session.has_tag?(tag)
+          msg.tag = tag
+          @log.debug("#{@peername} << #{msg.to_s}")
+          send_data(msg.to_bytes)
+          @session.release_tag(tag)
+        end
+      end
+
+      ##
+      # Process a StyxMessage.
+      #
+      def process_styxmsg(msg)
+        begin
+          tag = msg.tag
+          @session.add_tag(tag)
+          # call the appropriate handler method based on the name
+          # of the StyxMessage subclass.  These methods should either
+          # return a normal response, or raise an exception of
+          # some sort that (usually) gets turned by this block into
+          # an Rerror response based on the exception's message.
+          pname = msg.class.name.split("::")[-1].downcase.intern
+          resp = self.send(pname, msg)
+          if resp.nil?
+            raise StyxException.new("internal error: empty reply")
+          end
+          reply(resp, tag)
+        rescue TagInUseException => e
+          # In this case, we can't reply with an error to the client,
+          # since the tag used was invalid!  If debug level is high
+          # enough, simply print out an error.
+          @log.error("#{@peername} #{e.class.to_s} #{msg.to_s}")
+        rescue FidNotFoundException => e
+          @log.error("#{@peername} unknown fid in message #{msg.to_s}")
+          reply(Message::Rerror.new(:ename => "Unknown fid #{e.fid}"), tag)
+        rescue StyxException => e
+          @log.error("#{@peername} styx exception #{e.message} for #{msg.to_s}")
+          reply(Message::Rerror.new(:ename => "Error: #{e.message}"), tag)
+        rescue Exception => e
+          @log.error("#{@peername} internal error #{e.message} for #{e.to_s} at #{e.backtrace}")
+          reply(Message::Rerror.new(:ename => "Internal RStyx Error: #{e.message}"), tag)
+        end
+
+      end
+
+      ##
+      # Receive data from the network connection, called by EventMachine.
+      #
+      def receive_data(data)
+        # If we are in keyring authentication mode, send
+        if !(@authenticator.nil? || @authenticator.authenticated?)
+          @authenticator.receive_data(self, data)
+          return
+        end
+        @msgbuffer << data
+        # self.class.log.debug(" << #{data.unpack("H*").inspect}")
+        while @msgbuffer.length > 4
+          length = @msgbuffer.unpack("V")[0]
+          # Break out if there is not enough data in the message
+          # buffer to construct a message.
+          if @msgbuffer.length < length
+            break
+          end
+
+          # Decode the received data
+          message, @msgbuffer = @msgbuffer.unpack("a#{length}a*")
+          styxmsg = Message::StyxMessage.from_bytes(message)
+          @log.debug("#{@peername} >> #{styxmsg.to_s}")
+          process_styxmsg(styxmsg)
+
+          # after all this is done, there may still be enough data in
+          # the message buffer for more messages so keep looping.
+        end
+        # If we get here, we don't have enough data in the buffer to
+        # build a new message, so we just have to wait until there is
+        # enough.
+      end
+    end
 
     ##
     # Message receiving module for the Styx server.  The server will
