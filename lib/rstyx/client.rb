@@ -1,15 +1,13 @@
-#!/usr/bin/ruby
+#!/usr/bin/env ruby
 #
-# Author:: Rafael R. Sevilla (mailto:dido@imperium.ph)
-# Copyright:: Copyright (c) 2005-2007 Rafael R. Sevilla
-# Homepage:: http://rstyx.rubyforge.org/
+# Author:: Rafael R. Sevilla
+# Copyright:: Copyright (c) 2005-2007,2017 Rafael R. Sevilla
+# Homepage:: https://github.com/dido/rstyx
 # License:: GNU Lesser General Public License / Ruby License
-#
-# $Id: client.rb 279 2007-09-19 07:23:45Z dido $
 #
 #----------------------------------------------------------------------------
 #
-# Copyright (C) 2005-2007 Rafael Sevilla
+# Copyright (C) 2005-2007,2017 Rafael Sevilla
 # This file is part of RStyx
 #
 # This program is free software; you can redistribute it and/or modify
@@ -38,13 +36,13 @@ module RStyx
     # assemble all inbound messages. 
     #
     module StyxClient
-      attr_accessor :sentmessages, :keyringauth
+      attr_accessor :sentmessages, :auth
 
       def post_init
-        @msgbuffer = ""
+        @msgbuffer = "".force_encoding("ASCII-8BIT")
         @lock = Mutex.new
         @sentmessages = {}
-        @keyringauth = nil
+        @auth = nil
       end
 
       ##
@@ -115,10 +113,10 @@ module RStyx
       # Receive data from the network connection, called by EventMachine.
       #
       def receive_data(data)
-        # If we are in keyring authentication mode, write any data received
-        # into the @keyringauth's buffer, and simply return.
-        unless (@keyringauth.nil?)
-          @keyringauth << data
+        # If we are in authentication mode, write any data received
+        # into the @auth's buffer, and simply return.
+        unless @auth.authenticated?
+          @auth.receive_data(data)
           return
         end
         @msgbuffer << data
@@ -189,9 +187,9 @@ module RStyx
     class Connection
       attr_accessor :usedfids, :pendingclunks, :umask
       attr_reader :connectstate, :msize, :version
-      attr_reader :rootdirectory, :rootfid, :peerauth
+      attr_reader :rootdirectory, :rootfid, :authenticator
 
-      def initialize(auth=nil)
+      def initialize(auth=DummyAuthenticator.new)
         @usedfids = []
         @pendingclunks = {}
         @rpendingclunks = {}
@@ -253,15 +251,10 @@ module RStyx
         uname = ENV['USER']
         aname = ""
 
-        # Do Inferno authentication if the @authenticator object is a
-        # keyring authinfo object
-        if @authenticator.is_a?(Keyring::Authinfo)
-          @conn.keyringauth = Keyring::FileWrapper.new(@conn)
-          @peerauth, secret = Keyring.auth(@conn.keyringauth,
-                                           :client, @authenticator,
-                                           ["none"])
-          @conn.keyringauth = nil
-        end
+        # Set the authenticator object
+        @authenticator.connection = @conn
+        @conn.auth = @authenticator
+        @authenticator.authenticate
 
         # Connection has been established.  Begin the handshaking process
         # with the remote server.
