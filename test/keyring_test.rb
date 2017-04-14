@@ -50,6 +50,11 @@ class KeyringTest < Test::Unit::TestCase
     assert_equal("456", data)
     assert_equal("789", rest)
 
+    n, data, rest = RStyx::Keyring::recvmsg("0003\n456")
+    assert_equal(0, n)
+    assert_equal("456", data)
+    assert_equal("", rest)
+
     # Error messages
     assert_raise(RStyx::RemoteAuthErr) { RStyx::Keyring::recvmsg("!003\n456") }
 
