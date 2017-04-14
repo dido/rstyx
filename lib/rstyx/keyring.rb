@@ -145,7 +145,6 @@ module RStyx
 
       num,z = data.unpack("A5A*")
       iserr = false
-      i = nil
       n = 0
       if num =~ /^(!?)([0-9]+)$/
         iserr = $1 == "!"
@@ -397,224 +396,16 @@ EOS
     end
 
     ##
-    # Get a protocol message from a file descriptor
+    # Get protocol messages from a file descriptor
     def self.getmsg(fd)
       msg = ""
       loop do
-        len, msg, rest, err = self.recvmsg(msg)
+        len, msg, = self.recvmsg(msg)
         if len == 0
           return(msg)
         end
         msg << fd.read(len)
       end
-    end
-
-    ##
-    # Inferno Keyring auth
-    class Authenticator < Auth::Authenticator
-      ##
-      # My private (secret) key
-      attr_accessor :mysk
-      ##
-      # My public key
-      attr_accessor :mypk
-      ##
-      # Signature of my public key
-      attr_accessor :cert
-      ##
-      # Signer's public key
-      attr_accessor :spk
-      ##
-      # Diffie-Hellman p (prime number)
-      attr_accessor :p
-      ##
-      # Diffie-Hellman alpha (generator of Z_p)
-      attr_accessor :alpha
-
-      ##
-      # After authentication secret
-      attr_accessor :secret
-
-      ##
-      # Peer authentication
-      attr_accessor :peerauth
-
-      ##
-      # Authentication state
-      attr_reader :authstate
-
-      ##
-      # Authentication error
-      attr_reader :autherror
-
-      def initialize(sk, pk, cert, spk, alpha, p)
-        super
-        @mysk = sk
-        @mypk = pk
-        @cert = cert
-        @spk = spk
-        @alpha = alpha
-        @p = p
-        @data = []
-        @authstate = :vneg
-        @autherror = "none"
-      end
-
-      ##
-      # Read authentication information from an IO instance _fd_.
-      # This returns an Authinfo instance initialized with the
-      # information read from the file.
-      #
-      def self.readauthinfo(fd)
-        spk = InfPublicKey.from_s(Keyring::getmsg(fd))
-        cert = Certificate.from_s(Keyring::getmsg(fd))
-        mysk = InfPrivateKey.from_s(Keyring::getmsg(fd))
-        alpha = Keyring.s2big(Keyring::getmsg(fd))
-        p = Keyring.s2big(Keyring::getmsg(fd))
-        return(self.new(mysk, mysk.getpk, cert, spk, alpha, p))
-      end
-
-      def receive_data(data)
-        @data << data
-        jdata = @data.join
-      end
-
-      def sendmsg(data)
-        send_data(sprintf("%04d\n", data.length))
-        send_data(data)
-      end
-
-      def authenticate
-        case @authstate
-        when :vneg
-          # 1. Version negotiation
-        end
-      end
-
-    end
-
-    ##
-    # Perform the Inferno authentication protocol, reading messages
-    # from and writing messages to _fd_, given the authentication
-    # information object _info_.
-    #
-    def self.basicauth(fd, info)
-      secret = peerauth = nil
-      begin
-        # 1. Version negotiation
-        sendmsg(fd, "1")
-        buf = Keyring.getmsg(fd)
-        vers = buf.to_i
-        
-        # 2. Check version
-        if vers != 1 || buf.length > 4
-          raise LocalAuthErr.new("incompatible authentication protocol")
-        end
-
-        if info.nil?
-          raise LocalAuthErr.new("no authentication information")
-        end
-
-        if info.p.nil?
-          raise LocalAuthErr.new("missing diffie hellman mod")
-        end
-
-        if info.alpha.nil?
-          raise LocalAuthErr.new("missing diffie hellman base")
-        end
-
-        if info.mysk.nil? || info.mypk.nil? || info.cert.nil? || info.spk.nil?
-          raise LocalAuthErr.new("invalid authentication information")
-        end
-
-        if info.p <= 0
-          raise LocalAuthErr.new("negative modulus")
-        end
-        # 3. Diffie-Hellman authentication protocol.
-        low = info.p >> (Keyring.bit_size(info.p) / 4)
-        r0 = Keyring.randpq(low, info.p)
-        alphar0 = mod_exp(info.alpha, r0, info.p)
-        sendmsg(fd, Keyring.big2s(alphar0))
-        sendmsg(fd, info.cert.to_s)
-        sendmsg(fd, info.mypk.to_s)
-        # 4. Receive peer's alpha**r1 mod p and the peer's certificate
-        #    and public key.
-        alphar1 = Keyring.s2big(Keyring.getmsg(fd))
-        if info.p <= alphar1
-          raise LocalAuthErr.new("implausible parameter value")
-        end
-
-        if alphar0 == alphar1
-          raise LocalAuthErr.new("possible replay attack")
-        end
-        # 5. Verify the authenticity of the peer's certificate.
-        hiscert = Certificate.from_s(getmsg(fd))
-        hispkbuf = getmsg(fd)
-        hispk = InfPublicKey.from_s(hispkbuf)
-        unless verify(info.spk, hiscert, hispkbuf)
-          raise LocalAuthErr.new("pk doesn't match certificate")
-        end
-        if hiscert.exp != 0 && (Time.at(hiscert.exp) <= Time.now)
-          raise LocalAuthErr.new("certificate expired")
-        end
-
-        # 6. Send a certificate to the peer with alpha**r0 mod p and
-        # alpha**r1 mod p.
-        alphabuf = Keyring.big2s(alphar0) + Keyring.big2s(alphar1)
-        alphacert = sign(info.mysk, 0, alphabuf)
-        sendmsg(fd, alphacert.to_s)
-
-        # 7. Receive the peer's certificate
-        alphacert = Certificate.from_s(getmsg(fd))
-        alphabuf = Keyring.big2s(alphar1) + Keyring.big2s(alphar0)
-        # 8. Verify the certificate from the peer
-        unless verify(hispk, alphacert, alphabuf)
-          raise LocalAuthErr.new("signature did not match pk")
-        end
-
-        # alpha0r1 is the shared secret
-        alpha0r1 = mod_exp(alphar1, r0, info.p)
-        secret = ""
-        val = alpha0r1
-        while val > 0
-          c = val % 256
-          secret << c.chr
-          val = val / 256
-        end
-        # Remove any leading nulls
-        secret =~ /\0*(.*)/
-        secret = $1
-        peerauth = Authinfo.new(nil, hispk, hiscert, info.spk, info.alpha,
-                                info.p)
-        # 9. Send a protocol message containing OK back to the client.
-        sendmsg(fd, "OK")
-      rescue IOError => e
-        raise LocalAuthErr.new("I/O error: #{e.message}")
-      rescue InvalidCertificateException => e
-        senderrmsg(fd, "remote: #{e.message}")
-        raise e
-      rescue InvalidKeyException => e
-        senderrmsg(fd, "remote: #{e.message}")
-        raise e
-      rescue NoSuchAlgorithmException => e
-        senderrmsg(fd, "remote: unsupported algorithm: #{e.message}")
-        raise e
-      rescue LocalAuthErr => e
-        senderrmsg(fd, "remote: #{e.message}")
-        raise e
-      rescue RemoteAuthErr => e
-        senderrmsg(fd, "missing your authentication data")
-        raise AuthenticationException.new(e.message)
-      end
-
-      begin
-        # 10. Receive an OK from the peer.
-        until /OK/ =~ getmsg(fd)
-        end
-      rescue Exception => e
-        raise AuthenticationException.new("i/o error: #{e.message}")
-      end
-      return([peerauth, secret])
     end
 
     ##
@@ -775,6 +566,211 @@ EOS
         write(str)
       end
     end
+
+
+    class Authinfo
+      ##
+      # My private (secret) key
+      attr_accessor :sk
+      ##
+      # My public key
+      attr_accessor :pk
+      ##
+      # Signature of my public key
+      attr_accessor :cert
+      ##
+      # Signer's public key
+      attr_accessor :spk
+      ##
+      # Diffie-Hellman p (prime number)
+      attr_accessor :p
+      ##
+      # Diffie-Hellman alpha (generator of Z_p)
+      attr_accessor :alpha
+
+      def initialize(sk, pk, cert, spk, alpha, p)
+        @sk = sk
+        @pk = pk
+        @cert = cert
+        @spk = spk
+        @alpha = alpha
+        @p = p
+      end
+
+      ##
+      # Read authentication information from an IO instance _fd_.
+      # This returns an Authenticator instance initialized with the
+      # information read from the file.
+      #
+      def self.readauthinfo(fd)
+        spk = InfPublicKey.from_s(Keyring::getmsg(fd))
+        cert = Certificate.from_s(Keyring::getmsg(fd))
+        mysk = InfPrivateKey.from_s(Keyring::getmsg(fd))
+        alpha = Keyring.s2big(Keyring::getmsg(fd))
+        p = Keyring.s2big(Keyring::getmsg(fd))
+        return(self.new(mysk, mysk.getpk, cert, spk, alpha, p))
+      end
+    end
+
+    ##
+    # Inferno Keyring auth
+    class Authenticator < Auth::Authenticator
+
+      ##
+      # Authentication information
+      attr_accessor :ai
+
+      ##
+      # After authentication secret
+      attr_accessor :secret
+
+      ##
+      # Peer authentication
+      attr_accessor :peerauth
+
+      ##
+      # Authentication state
+      attr_reader :authstate
+
+      ##
+      # Authentication error
+      attr_reader :autherror
+
+      def initialize(authinfo)
+        super
+        @ai = authinfo
+        @data = []
+        @authstate = :idle
+        @autherror = nil
+      end
+
+      def receive_data(data)
+        begin
+          loop do
+            @data << data
+            jdata = @data.join
+            len, msg, rest = Keyring::recvmsg(jdata)
+            # Full message not yet received
+            return if len > 0
+            @data = []
+            # Full message received, process according to current authstate
+            case @authstate
+            when :idle
+              # Do nothing
+            when :vneg
+              # See if the received version is valid
+              if msg.to_i == 1
+                # Valid version received, proceed to Diffie-Hellman auth
+                @authstate = :dhauth
+                # Send to the peer our alpha**r0, certificate, and pubkey
+                low = @ai.p >> (Keyring::bit_size(@ai.p) / 4)
+                @r0 = Keyring::randpq(low, @ai.p)
+                @alphar0 = Keyring::mod_exp(@ai.alpha, @r0, @ai.p)
+                sendmsg(Keyring::big2s(@alphar0))
+                sendmsg(@ai.cert.to_s)
+                sendmsg(@ai.pk.to_s)
+              else
+                raise LocalAuthError, "incompatible authentication protocol"
+              end
+            when :dhauth
+              # Receive peer's alpha**r1 mod p and the peer's certificate
+              # and public key.
+              @alphar1 = Keyring::s2big(msg)
+              if @ai.p <= @alphar1
+                raise LocalAuthError, "implausible parameter value"
+              end
+
+              if @alphar0 == @alphar1
+                raise LocalAuthError, "possible replay attack"
+              end
+              @authstate = :dhcert
+            when :dhcert
+              # Receive peer's certificate
+              @hiscert = Certificate.from_s(msg)
+              @authstate = :dhpk
+            when :dhpk
+              @hispkbuf = msg
+              @hispk = InfPublicKey.from_s(@hispkbuf)
+              unless Keyring::verify(@ai.spk, @hiscert, @hispkbuf)
+                raise LocalAuthError, "pk doesn't match certificate"
+              end
+              if @hiscert.exp != 0 && Time.at(@hiscert.exp) < Time.now
+                raise LocalAuthError, "certificate expired"
+              end
+              @authstate = :dhauth2
+              # Send certificate to the peer with alpha**r0 mod p and
+              # alpha**r1 mod p
+              alphabuf = Keyring::big2s(@alphar0) + Keyring::big2s(@alphar1)
+              alphacert = Keyring::sign(@ai.sk, 0, alphabuf)
+              sendmsg(alphacert.to_s)
+            when :dhauth2
+              # Receive the peer's certficate
+              alphacert = Certificate.from_s(msg)
+              alphabuf = Keyring.big2s(@alphar1) + Keyring.big2s(@alphar0)
+              # Verify the certificate from the peer
+              unless Keyring::verify(@hispk, alphacert, alphabuf)
+                raise LocalAuthError, "signature did not match pk"
+              end
+
+              # alpha0r1 is the shared secret
+              alpha0r1 = Keyring::mod_exp(alphar1, @r0, @ai.p)
+              @secret = "".force_encoding("ASCII-8BIT")
+              val = alpha0r1
+              while val > 0
+                c = val % 256
+                @secret << c.chr
+                val = val / 256
+              end
+              # remove any leading nulls
+              @secret =~ /\0*(.*)/
+              @secret = $1
+              # Peer authentication info
+              @peerauth = Authinfo.new(nil, @hispk, @hiscert, @ai.spk,
+                                       @ai.alpha, @ai.p)
+              # Send protocol message OK back to client
+              sendmsg("OK")
+              @authstate = :waitok
+            when :waitok
+              if msg =~ /^OK$/
+                @authenticated = true
+                self.succeed
+              end
+              @authstate = :idle
+            end
+            data = rest
+          end
+        rescue InvalidCertificateException, InvalidKeyException, NoSuchAlgorithmException, LocalAuthErr
+          send_errmsg("remote: #{$!.message}")
+          @autherror = $!
+        rescue RemoteAuthErr
+          send_errmsg("missing your authentication data")
+          @autherror = AuthenticationException.new($!.message)
+        rescue
+          @autherror = $!
+        end
+        @authstate = :idle
+        self.fail($!.message)
+      end
+
+      def sendmsg(data)
+        send_data(sprintf("%04d\n", data.length))
+        send_data(data)
+      end
+
+      def senderrmsg(data)
+        send_data(sprintf("!%03d\n", data.length))
+        send_data(data)
+      end
+
+      def authenticate
+        # Initiate authentication by sending version
+        sendmsg("1")
+        @authstate = :vneg
+        return(self)
+      end
+
+    end
+
 
   end
 
