@@ -1,15 +1,13 @@
-#!/usr/bin/ruby
+#!/usr/bin/env ruby
 #
-# Author:: Rafael R. Sevilla (mailto:dido@imperium.ph)
-# Copyright:: Copyright (c) 2005-2007 Rafael R. Sevilla
-# Homepage:: http://rstyx.rubyforge.org/
+# Author:: Rafael R. Sevilla
+# Copyright:: Copyright (c) 2005-2007,2017 Rafael R. Sevilla
+# Homepage:: https://github.com/dido/rstyx
 # License:: GNU Lesser General Public License / Ruby License
-#
-# $Id: keyring.rb 282 2007-09-19 07:26:50Z dido $
 #
 #----------------------------------------------------------------------------
 #
-# Copyright (C) 2005-2007 Rafael Sevilla
+# Copyright (C) 2005-2007,2017 Rafael Sevilla
 # This file is part of RStyx
 #
 # This program is free software; you can redistribute it and/or modify
@@ -132,36 +130,43 @@ module RStyx
     end
 
     ##
-    # Get a message from _fd_.  A message is defined as a four-digit
-    # number (representing the size), followed by a newline, followed by
-    # a number of bytes equal to the number.  The number may be preceded
-    # by an exclamation point, in which the data becomes the message sent
-    # as a RemoteAuthErr exception's error text.
-    #
-    def self.getmsg(fd)
-      num = fd.read(5)
-      if num[4..4] != "\n"
-        raise IOError.new("bad message syntax")
+    # Try to receive a message. Returns an array:
+    # 0. The total length required for decode (0 -> message decoded)
+    # 1. The message received or the error message
+    # 2. The remaining unconsumed data
+    def self.recvmsg(data)
+      if data.length < 5
+        # Not enough data to read the length, return the data
+        return([5, nil, data])
+      end
+      if data[4..4] != "\n"
+        raise IOError, "bad message syntax"
       end
 
+      num,z = data.unpack("A5A*")
       iserr = false
       i = nil
       n = 0
-      if num[0..0] == '!'
-        iserr = true
-        n = num[1,3].to_i
+      if num =~ /^(!?)([0-9]+)$/
+        iserr = $1 == "!"
+        n = $2.to_i
       else
-        n = num.to_i
+        raise IOError, "bad message syntax"
       end
 
       if n < 0 || n > MAX_MSG
-        raise IOError.new("message syntax")
+        raise IOError, "bad message syntax"
       end
-      z = fd.read(n)
+
+      if z.length < n
+        # insufficient data
+        return([n, nil, data])
+      end
+
       if iserr
-        raise RemoteAuthErr.new(z)
+        raise RemoteAuthErr, z[0..n-1]
       end
-      return(z)
+      return([0, z[0..n-1], z[n..-1]])
     end
 
     ##
@@ -392,8 +397,21 @@ EOS
     end
 
     ##
-    # Inferno authentication information data
-    class Authinfo
+    # Get a protocol message from a file descriptor
+    def self.getmsg(fd)
+      msg = ""
+      loop do
+        len, msg, rest, err = self.recvmsg(msg)
+        if len == 0
+          return(msg)
+        end
+        msg << fd.read(len)
+      end
+    end
+
+    ##
+    # Inferno Keyring auth
+    class Authenticator < Auth::Authenticator
       ##
       # My private (secret) key
       attr_accessor :mysk
@@ -413,13 +431,33 @@ EOS
       # Diffie-Hellman alpha (generator of Z_p)
       attr_accessor :alpha
 
+      ##
+      # After authentication secret
+      attr_accessor :secret
+
+      ##
+      # Peer authentication
+      attr_accessor :peerauth
+
+      ##
+      # Authentication state
+      attr_reader :authstate
+
+      ##
+      # Authentication error
+      attr_reader :autherror
+
       def initialize(sk, pk, cert, spk, alpha, p)
+        super
         @mysk = sk
         @mypk = pk
         @cert = cert
         @spk = spk
         @alpha = alpha
         @p = p
+        @data = []
+        @authstate = :vneg
+        @autherror = "none"
       end
 
       ##
@@ -428,12 +466,29 @@ EOS
       # information read from the file.
       #
       def self.readauthinfo(fd)
-        spk = InfPublicKey.from_s(Keyring.getmsg(fd))
-        cert = Certificate.from_s(Keyring.getmsg(fd))
-        mysk = InfPrivateKey.from_s(Keyring.getmsg(fd))
-        alpha = Keyring.s2big(Keyring.getmsg(fd))
-        p = Keyring.s2big(Keyring.getmsg(fd))
-        return(Authinfo.new(mysk, mysk.getpk, cert, spk, alpha, p))
+        spk = InfPublicKey.from_s(Keyring::getmsg(fd))
+        cert = Certificate.from_s(Keyring::getmsg(fd))
+        mysk = InfPrivateKey.from_s(Keyring::getmsg(fd))
+        alpha = Keyring.s2big(Keyring::getmsg(fd))
+        p = Keyring.s2big(Keyring::getmsg(fd))
+        return(self.new(mysk, mysk.getpk, cert, spk, alpha, p))
+      end
+
+      def receive_data(data)
+        @data << data
+        jdata = @data.join
+      end
+
+      def sendmsg(data)
+        send_data(sprintf("%04d\n", data.length))
+        send_data(data)
+      end
+
+      def authenticate
+        case @authstate
+        when :vneg
+          # 1. Version negotiation
+        end
       end
 
     end
@@ -720,8 +775,6 @@ EOS
         write(str)
       end
     end
-
-
 
   end
 
