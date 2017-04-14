@@ -30,29 +30,29 @@ require 'rstyx/errors'
 
 class KeyringTest < Test::Unit::TestCase
   def test_recvmsg
-    n, = RStyx::Keyring::Authenticator.recvmsg("")
+    n, = RStyx::Keyring::recvmsg("")
     assert_equal(5, n)
     # Invalid formats
-    assert_raise(IOError) { RStyx::Keyring::Authenticator.recvmsg("123\n456") }
-    assert_raise(IOError) { RStyx::Keyring::Authenticator.recvmsg("123a\n456") }
-    assert_raise(IOError) { RStyx::Keyring::Authenticator.recvmsg("!12b\n456") }
+    assert_raise(IOError) { RStyx::Keyring::recvmsg("123\n456") }
+    assert_raise(IOError) { RStyx::Keyring::recvmsg("123a\n456") }
+    assert_raise(IOError) { RStyx::Keyring::recvmsg("!12b\n456") }
     # Message exceeds maximum length (4096)
-    assert_raise(IOError) { RStyx::Keyring::Authenticator.recvmsg("9999\n456") }
+    assert_raise(IOError) { RStyx::Keyring::recvmsg("9999\n456") }
 
     # Valid formats
-    n, data, rest = RStyx::Keyring::Authenticator.recvmsg("0003\n456")
+    n, data, rest = RStyx::Keyring::recvmsg("0003\n456")
     assert_equal(0, n)
     assert_equal("456", data)
     assert_equal("", rest)
 
-    n, data, rest = RStyx::Keyring::Authenticator.recvmsg("0003\n456789")
+    n, data, rest = RStyx::Keyring::recvmsg("0003\n456789")
     assert_equal(0, n)
     assert_equal("456", data)
     assert_equal("789", rest)
 
     # Error messages
-    assert_raise(RStyx::RemoteAuthErr) { RStyx::Keyring::Authenticator.recvmsg("!003\n456") }
+    assert_raise(RStyx::RemoteAuthErr) { RStyx::Keyring::recvmsg("!003\n456") }
 
-    assert_raise(RStyx::RemoteAuthErr) { RStyx::Keyring::Authenticator.recvmsg("!003\n456789") }
+    assert_raise(RStyx::RemoteAuthErr) { RStyx::Keyring::recvmsg("!003\n456789") }
   end
 end
