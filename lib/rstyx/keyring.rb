@@ -169,6 +169,19 @@ module RStyx
     end
 
     ##
+    # Get protocol messages from a file descriptor
+    def self.getmsg(fd)
+      msg = ""
+      loop do
+        len, msg, = self.recvmsg(msg)
+        if len == 0
+          return(msg)
+        end
+        msg << fd.read(len)
+      end
+    end
+
+    ##
     # An Inferno public key.
     #
     class InfPublicKey
@@ -391,19 +404,6 @@ EOS
     end
 
     ##
-    # Get protocol messages from a file descriptor
-    def self.getmsg(fd)
-      msg = ""
-      loop do
-        len, msg, = self.recvmsg(msg)
-        if len == 0
-          return(msg)
-        end
-        msg << fd.read(len)
-      end
-    end
-
-    ##
     # Set cryptographic algorithms in use, given a connection object _fd_
     # a role _role_ (which may be :client or :server), and a list of
     # algorithms.  Only the first algorithm listed is in use.  This is
@@ -491,7 +491,7 @@ EOS
       val = str2big(sha1.digest)
       return(rsaverify(val, c.rsa, pk.pk))
     end
-
+<
     ##
     # Authentication information, includes private key (if any),
     # public key, certificate, CA public key, and DH parameters.
