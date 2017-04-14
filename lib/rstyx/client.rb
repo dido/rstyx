@@ -284,9 +284,9 @@ module RStyx
           #    object.
           #
           # If we have an authenticator object, we call its authenticator
-          # method with ourself.
+          # method.
           #
-          rfid = @auth.authenticate(self)
+          rfid = @auth.authenticate
         end
 
         # If we get here, we're connected, and rfid represents the root
