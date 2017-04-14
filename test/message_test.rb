@@ -1,13 +1,13 @@
-#!/usr/bin/ruby
+#!/usr/bin/env ruby
 #
-# Author:: Rafael R. Sevilla (mailto:dido@imperium.ph)
-# Copyright:: Copyright (c) 2005-2007 Rafael R. Sevilla
-# Homepage:: https://github.com/dido/rstyx/
+# Author:: Rafael R. Sevilla
+# Copyright:: Copyright (c) 2005-2007,2017 Rafael R. Sevilla
+# Homepage:: https://github.com/dido/rstyx
 # License:: GNU Lesser General Public License / Ruby License
 #
 #----------------------------------------------------------------------------
 #
-# Copyright (C) 2005-2007 Rafael Sevilla
+# Copyright (C) 2005-2007,2017 Rafael Sevilla
 # This file is part of RStyx
 #
 # This program is free software; you can redistribute it and/or modify
