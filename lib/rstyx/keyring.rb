@@ -169,23 +169,6 @@ module RStyx
     end
 
     ##
-    # Send a message to _fd_, prefixed by a four-digit zero-padded size.
-    #
-    def self.sendmsg(fd, data)
-      fd.printf("%04d\n", data.length)
-      fd.write(data)
-    end
-
-    ##
-    # Send an error message to _fd_, prefixed by a ! and a three digit
-    # size.
-    #
-    def self.senderrmsg(fd, data)
-      fd.printf("!%03d\n", data.length)
-      fd.write(data)
-    end
-
-    ##
     # An Inferno public key.
     #
     class InfPublicKey
@@ -281,7 +264,7 @@ EOS
 
         # Mind your p's and q's: libsec's p is OpenSSL's q!  OpenSSL follows
         # PKCS#1 in reversing their roles.  We need to reverse p and q, and
-        # dmp1 and dmq1 to use OpenSSL, but here we do everything in pure
+        # dmp1 and dmq1 to use OpenSSL, but for now we do everything in pure
         # Ruby as much as we can.
         sk = OpenSSL::PKey::RSA.new
         sk.n = Keyring.s2big(a[2])
@@ -324,6 +307,18 @@ EOS
         return(str)
       end
 
+      ##
+      # Sign a certificate, with an expiration time_exp_ in seconds from
+      # the Epoch, and the data to sign _a_.
+      #
+      def sign(exp, a)
+        sha1 = Digest::SHA1.new
+        sha1.update(a)
+        sha1.update("#{@owner} #{exp}")
+        digest = str2big(sha1.digest)
+        sig = rsadecrypt(@sk, digest)
+        return(Certificate.new("rsa", "sha1", sk.owner, exp, sig))
+      end
     end
 
     ##
@@ -443,7 +438,7 @@ EOS
     # See Inferno's keyring-auth(2) for more details on how this
     # should work.
     #
-    def self.auth(fd, role, info, algs)
+    def self.auth(fd, role, info, algs, role)
       res = basicauth(fd, info)
       setlinecrypt(fd, role, algs)
       return(res)
@@ -498,76 +493,8 @@ EOS
     end
 
     ##
-    # Sign a certificate, given a private key _sk_, an expiration time
-    # _exp_ in seconds from the Epoch, and the data to sign _a_.
-    #
-    def self.sign(sk, exp, a)
-      sha1 = Digest::SHA1.new
-      sha1.update(a)
-      sha1.update("#{sk.owner} #{exp}")
-      digest = str2big(sha1.digest)
-      sig = rsadecrypt(sk.sk, digest)
-      return(Certificate.new("rsa", "sha1", sk.owner, exp, sig))
-    end
-
-    ##
-    # A connection wrapper, which provides read and write methods
-    # just like a socket, given a connection object.
-    #
-    class FileWrapper
-      attr_accessor :data
-      ##
-      # Create a new FileWrapper, given an EventMachine connection
-      # object.
-      #
-      def initialize(conn)
-        @conn = conn
-        @data = ""
-        @datalock = Mutex.new
-        @dcondvar = ConditionVariable.new
-      end
-
-      ##
-      # Write data to the connection
-      #
-      def write(data)
-        @conn.send_data(data)
-      end
-
-      ##
-      # Read data from the connection
-      #
-      def read(length)
-        @datalock.synchronize do
-          while @data.length < length
-            @dcondvar.wait(@datalock)
-          end
-          retval, rest = @data.unpack("a#{length}a*")
-          @data = rest
-          return(retval)
-        end
-      end
-
-      ##
-      # Add data received from the connection here
-      #
-      def <<(str)
-        @datalock.synchronize do
-          @data << str
-          @dcondvar.signal
-        end
-      end
-
-      ##
-      # Print data to the connection
-      #
-      def printf(str, *args)
-        str = sprintf(str, *args)
-        write(str)
-      end
-    end
-
-
+    # Authentication information, includes private key (if any),
+    # public key, certificate, CA public key, and DH parameters.
     class Authinfo
       ##
       # My private (secret) key
@@ -636,7 +563,11 @@ EOS
       # Authentication error
       attr_reader :autherror
 
-      def initialize(authinfo)
+      ##
+      # Permitted algorithms for authentication
+      attr_reader :reqalgs
+
+      def initialize(authinfo, reqalgs)
         super
         @ai = authinfo
         @data = []
@@ -701,7 +632,7 @@ EOS
               # Send certificate to the peer with alpha**r0 mod p and
               # alpha**r1 mod p
               alphabuf = Keyring::big2s(@alphar0) + Keyring::big2s(@alphar1)
-              alphacert = Keyring::sign(@ai.sk, 0, alphabuf)
+              alphacert = @ai.sk.sign(0, alphabuf)
               sendmsg(alphacert.to_s)
             when :dhauth2
               # Receive the peer's certficate
