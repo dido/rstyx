@@ -26,6 +26,7 @@ require 'eventmachine'
 require 'rstyx/common'
 require 'rstyx/auth'
 require 'rstyx/keyring'
+require 'rstyx/errors'
 
 class KeyringTest < Test::Unit::TestCase
   def test_recvmsg
@@ -39,29 +40,19 @@ class KeyringTest < Test::Unit::TestCase
     assert_raise(IOError) { RStyx::Keyring::Authenticator.recvmsg("9999\n456") }
 
     # Valid formats
-    n, data, rest, err = RStyx::Keyring::Authenticator.recvmsg("0003\n456")
+    n, data, rest = RStyx::Keyring::Authenticator.recvmsg("0003\n456")
     assert_equal(0, n)
     assert_equal("456", data)
     assert_equal("", rest)
-    assert(!err)
 
-    n, data, rest, err = RStyx::Keyring::Authenticator.recvmsg("0003\n456789")
+    n, data, rest = RStyx::Keyring::Authenticator.recvmsg("0003\n456789")
     assert_equal(0, n)
     assert_equal("456", data)
     assert_equal("789", rest)
-    assert(!err)
 
     # Error messages
-    n, data, rest, err = RStyx::Keyring::Authenticator.recvmsg("!003\n456")
-    assert_equal(0, n)
-    assert_equal("456", data)
-    assert_equal("", rest)
-    assert(err)
+    assert_raise(RStyx::RemoteAuthErr) { RStyx::Keyring::Authenticator.recvmsg("!003\n456") }
 
-    n, data, rest, err = RStyx::Keyring::Authenticator.recvmsg("!003\n456789")
-    assert_equal(0, n)
-    assert_equal("456", data)
-    assert_equal("789", rest)
-    assert(err)
+    assert_raise(RStyx::RemoteAuthErr) { RStyx::Keyring::Authenticator.recvmsg("!003\n456789") }
   end
 end
