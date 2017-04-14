@@ -1,15 +1,13 @@
-#!/usr/bin/ruby
+#!/usr/bin/env ruby
 #
-# Author:: Rafael R. Sevilla (mailto:dido@imperium.ph)
-# Copyright:: Copyright (c) 2005-2007 Rafael R. Sevilla
-# Homepage:: http://rstyx.rubyforge.org/
+# Author:: Rafael R. Sevilla
+# Copyright:: Copyright (c) 2005-2007,2017 Rafael R. Sevilla
+# Homepage:: https://github.com/dido/rstyx
 # License:: GNU Lesser General Public License / Ruby License
-#
-# $Id: rstyx.rb 294 2007-09-19 07:45:28Z dido $
 #
 #----------------------------------------------------------------------------
 #
-# Copyright (C) 2005-2007 Rafael Sevilla
+# Copyright (C) 2005-2007,2017 Rafael Sevilla
 # This file is part of RStyx
 #
 # This program is free software; you can redistribute it and/or modify
@@ -27,6 +25,7 @@
 require 'rstyx/common'
 require 'rstyx/messages'
 require 'rstyx/errors'
+require 'rstyx/auth'
 require 'rstyx/keyring'
 require 'rstyx/client'
 require 'rstyx/server'
