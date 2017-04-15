@@ -35,6 +35,7 @@ class MessageTest < Test::Unit::TestCase
     qid = RStyx::Message::Qid.new(0x01,0xdeadbeef,0xfeedfacec0ffeeee)
     bytes = qid.to_bytes
     # Test if the serialized version is as expected
+    assert_equal("ASCII-8BIT", bytes.encoding.name)
     assert(bytes == "\x01\xef\xbe\xad\xde\xee\xee\xff\xc0\xce\xfa\xed\xfe".force_encoding("ASCII-8BIT"))
 
     # Try to deserialize and check whether the output is as expected
@@ -84,6 +85,7 @@ class MessageTest < Test::Unit::TestCase
     de.gid = "baz"
     de.muid = "quux"
     bytes = de.to_bytes
+    assert_equal("ASCII-8BIT", bytes.encoding.name)
     expect = "\x3c\x00\x34\x12\xab\x90\x78\x56\x01\xef\xbe\xad\xde\xee\xee\xff\xc0\xce\xfa\xed\xfe\xf0\xde\xbc\x9a\xef\xbe\xad\xde\xbe\xba\xfe\xca\x10\x32\x54\x76\x98\xba\xdc\xfe\x03\x00foo\x03\x00bar\x03\x00baz\x04\x00quux".force_encoding("ASCII-8BIT")
     assert(bytes == expect)
 
@@ -135,6 +137,7 @@ class MessageTest < Test::Unit::TestCase
   def test_tversion
     tv = RStyx::Message::Tversion.new(:msize => 0xdeadbeef, :version => "9P2000", :tag => 0x1234)
     bytes = tv.to_bytes
+    assert_equal("ASCII-8BIT", bytes.encoding.name)
     expect = "\x13\x00\x00\x00\x64\x34\x12\xef\xbe\xad\xde\x06\x009P2000".force_encoding("ASCII-8BIT")
     assert(expect == bytes)
     # Try to decode the expect string
@@ -163,6 +166,7 @@ class MessageTest < Test::Unit::TestCase
   def test_rversion
     rv = RStyx::Message::Rversion.new(:msize => 0xdeadbeef, :version => "9P2000", :tag => 0x1234)
     bytes = rv.to_bytes
+    assert_equal("ASCII-8BIT", bytes.encoding.name)
     expect = "\x13\x00\x00\x00\x65\x34\x12\xef\xbe\xad\xde\x06\x009P2000".force_encoding("ASCII-8BIT")
     assert(expect == bytes)
     # Try to decode the expect string
@@ -192,6 +196,7 @@ class MessageTest < Test::Unit::TestCase
   def test_tauth
     ta = RStyx::Message::Tauth.new(:uname => "foo", :afid => 0x9abcdef0, :aname => "bar", :tag => 0x1234)
     bytes = ta.to_bytes
+    assert_equal("ASCII-8BIT", bytes.encoding.name)
     expect = "\x66\x34\x12\xf0\xde\xbc\x9a\x03\x00foo\x03\x00bar".force_encoding("ASCII-8BIT")
     len = expect.length + 4
     expect = [len].pack("V") + expect
@@ -226,6 +231,7 @@ class MessageTest < Test::Unit::TestCase
   def test_rauth
     ra = RStyx::Message::Rauth.new(:aqid => RStyx::Message::Qid.new(0x01, 0xdeadbeef, 0xfeedfacec0ffeeee), :tag => 0x1234)
     bytes = ra.to_bytes
+    assert_equal("ASCII-8BIT", bytes.encoding.name)
     expect = "\x67\x34\x12\x01\xef\xbe\xad\xde\xee\xee\xff\xc0\xce\xfa\xed\xfe".force_encoding("ASCII-8BIT")
     len = expect.length + 4
     expect = [len].pack("V") + expect
@@ -256,7 +262,8 @@ class MessageTest < Test::Unit::TestCase
   def test_rerror
     rerr = RStyx::Message::Rerror.new(:ename => "error", :tag => 0x1234)
     bytes = rerr.to_bytes
-    expect = "\x0e\x00\x00\x00\x6b\x34\x12\x05\x00error"
+    assert_equal("ASCII-8BIT", bytes.encoding.name)
+    expect = "\x0e\x00\x00\x00\x6b\x34\x12\x05\x00error".force_encoding("ASCII-8BIT")
     assert(bytes == expect)
 
     # Try to decode the expect string
@@ -287,7 +294,8 @@ class MessageTest < Test::Unit::TestCase
   def test_tflush
     tf = RStyx::Message::Tflush.new(:oldtag => 0x5678, :tag => 0x1234)
     bytes = tf.to_bytes
-    expect = "\x6c\x34\x12\x78\x56"
+    assert_equal("ASCII-8BIT", bytes.encoding.name)
+    expect = "\x6c\x34\x12\x78\x56".force_encoding("ASCII-8BIT")
     len = expect.length + 4
     packlen = [len].pack("V")
     expect = packlen + expect
@@ -319,7 +327,8 @@ class MessageTest < Test::Unit::TestCase
   def test_rflush
     tf = RStyx::Message::Rflush.new(:tag => 0x1234)
     bytes = tf.to_bytes
-    expect = "\x6d\x34\x12"
+    assert_equal("ASCII-8BIT", bytes.encoding.name)
+    expect = "\x6d\x34\x12".force_encoding("ASCII-8BIT")
     len = expect.length + 4
     packlen = [len].pack("V")
     expect = packlen + expect
@@ -349,6 +358,7 @@ class MessageTest < Test::Unit::TestCase
   def test_tattach
     ta = RStyx::Message::Tattach.new(:fid=> 0x12345678, :uname => "foo", :afid => 0x9abcdef0, :aname => "bar", :tag => 0x1234)
     bytes = ta.to_bytes
+    assert_equal("ASCII-8BIT", bytes.encoding.name)
     expect = "\x68\x34\x12\x78\x56\x34\x12\xf0\xde\xbc\x9a\x03\x00foo\x03\x00bar".force_encoding("ASCII-8BIT")
     len = expect.length + 4
     packlen = [len].pack("V") 
@@ -388,6 +398,7 @@ class MessageTest < Test::Unit::TestCase
   def test_rattach
     ra = RStyx::Message::Rattach.new(:qid => RStyx::Message::Qid.new(0x01, 0xdeadbeef, 0xfeedfacec0ffeeee), :tag => 0x1234)
     bytes = ra.to_bytes
+    assert_equal("ASCII-8BIT", bytes.encoding.name)
     expect = "\x69\x34\x12\x01\xef\xbe\xad\xde\xee\xee\xff\xc0\xce\xfa\xed\xfe".force_encoding("ASCII-8BIT")
     len = expect.length + 4
     packlen = [len].pack("V") 
@@ -424,6 +435,7 @@ class MessageTest < Test::Unit::TestCase
                                                "quux", "blargle"],
                                    :tag => 0x1234)
     bytes = tw.to_bytes
+    assert_equal("ASCII-8BIT", bytes.encoding.name)
     expect = "\x6e\x34\x12\x78\x56\x34\x12\xf0\xde\xbc\x9a\x05\x00\x03\x00foo\x03\x00bar\x03\x00baz\x04\x00quux\x07\x00blargle".force_encoding("ASCII-8BIT")
     len = expect.length + 4
     packlen = [len].pack("V") 
@@ -464,6 +476,7 @@ class MessageTest < Test::Unit::TestCase
     ]
     rw = RStyx::Message::Rwalk.new(:qids => qidlist, :tag => 0x1234)
     bytes = rw.to_bytes
+    assert_equal("ASCII-8BIT", bytes.encoding.name)
     expect = "\x6f\x34\x12\x03\x00\x01\xef\xbe\xad\xde\xee\xee\xff\xc0\xce\xfa\xed\xfe\x02\x78\x56\x34\x12\x10\x32\x54\x76\x98\xba\xdc\xfe\x03\x21\x43\x65\x87\xef\xcd\xab\x89\x67\x45\x23\x01".force_encoding("ASCII-8BIT")
     len = expect.length + 4
     packlen = [len].pack("V") 
@@ -521,7 +534,8 @@ class MessageTest < Test::Unit::TestCase
                                    :mode => RStyx::OWRITE | RStyx::OTRUNC | RStyx::ORCLOSE,
                                    :tag => 0x1234)
     bytes = to.to_bytes
-    expect = "\x70\x34\x12\x78\x56\x34\x12\x51"
+    assert_equal("ASCII-8BIT", bytes.encoding.name)
+    expect = "\x70\x34\x12\x78\x56\x34\x12\x51".force_encoding("ASCII-8BIT")
     len = expect.length + 4
     packlen = [len].pack("V")
     expect = packlen + expect
@@ -553,6 +567,7 @@ class MessageTest < Test::Unit::TestCase
   def test_ropen
     ro = RStyx::Message::Ropen.new(:qid => RStyx::Message::Qid.new(0x01,0xdeadbeef,0xfeedfacec0ffeeee), :iounit => 0xfedcba98, :tag => 0x1234)
     bytes = ro.to_bytes
+    assert_equal("ASCII-8BIT", bytes.encoding.name)
     expect = "\x71\x34\x12\x01\xef\xbe\xad\xde\xee\xee\xff\xc0\xce\xfa\xed\xfe\x98\xba\xdc\xfe".force_encoding("ASCII-8BIT")
     len = expect.length + 4
     packlen = [len].pack("V")
@@ -594,6 +609,7 @@ class MessageTest < Test::Unit::TestCase
                                      :perm => 0xfedcba98,
                                      :tag => 0x1234)
     bytes = tc.to_bytes
+    assert_equal("ASCII-8BIT", bytes.encoding.name)
     expect = "\x72\x34\x12\x78\x56\x34\x12\x03\x00foo\x98\xba\xdc\xfe\x51".force_encoding("ASCII-8BIT")
     len = expect.length + 4
     packlen = [len].pack("V") 
@@ -633,6 +649,7 @@ class MessageTest < Test::Unit::TestCase
   def test_rcreate
     rc = RStyx::Message::Rcreate.new(:qid => RStyx::Message::Qid.new(0x01,0xdeadbeef,0xfeedfacec0ffeeee), :iounit => 0xfedcba98, :tag => 0x1234)
     bytes = rc.to_bytes
+    assert_equal("ASCII-8BIT", bytes.encoding.name)
     expect = "\x73\x34\x12\x01\xef\xbe\xad\xde\xee\xee\xff\xc0\xce\xfa\xed\xfe\x98\xba\xdc\xfe".force_encoding("ASCII-8BIT")
     len = expect.length + 4
     packlen = [len].pack("V")
@@ -671,6 +688,7 @@ class MessageTest < Test::Unit::TestCase
   def test_tread
     tr = RStyx::Message::Tread.new(:fid => 0xdeadbeef, :offset => 0xfeedfacec0ffeeee, :count => 0xcafebabe, :tag => 0x1234)
     bytes = tr.to_bytes
+    assert_equal("ASCII-8BIT", bytes.encoding.name)
     expect = "\x74\x34\x12\xef\xbe\xad\xde\xee\xee\xff\xc0\xce\xfa\xed\xfe\xbe\xba\xfe\xca".force_encoding("ASCII-8BIT")
     len = expect.length + 4
     packlen = [len].pack("V")
@@ -712,6 +730,7 @@ class MessageTest < Test::Unit::TestCase
     data = "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mama nancy oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee \xff\xfe\xfd\xfc".force_encoding("ASCII-8BIT")
     rr = RStyx::Message::Rread.new(:data => data, :tag => 0x1234)
     bytes = rr.to_bytes
+    assert_equal("ASCII-8BIT", bytes.encoding.name)
     expect = "\x75\x34\x12\xa0\x00\x00\x00".force_encoding("ASCII-8BIT") + data
     len = expect.length + 4
     packlen = [len].pack("V")
@@ -753,6 +772,7 @@ class MessageTest < Test::Unit::TestCase
     packlen = [len].pack("V")
     expect = packlen + expect
     bytes = tw.to_bytes
+    assert_equal("ASCII-8BIT", bytes.encoding.name)
     assert(expect == bytes)
 
     # Decode expect
@@ -786,7 +806,8 @@ class MessageTest < Test::Unit::TestCase
   def test_rwrite
     rw = RStyx::Message::Rwrite.new(:count => 0x12345678, :tag => 0x1234)
     bytes = rw.to_bytes
-    expect = "\x77\x34\x12\x78\x56\x34\x12"
+    assert_equal("ASCII-8BIT", bytes.encoding.name)
+    expect = "\x77\x34\x12\x78\x56\x34\x12".force_encoding("ASCII-8BIT")
     len = expect.length + 4
     packlen = [len].pack("V")
     expect = packlen + expect
@@ -819,6 +840,7 @@ class MessageTest < Test::Unit::TestCase
     len = expect.length + 4
     packlen = [len].pack("V")
     expect = packlen + expect
+    assert_equal("ASCII-8BIT", tc.to_bytes.encoding.name)
     assert(expect == tc.to_bytes)
 
     # decode expect
@@ -847,7 +869,8 @@ class MessageTest < Test::Unit::TestCase
   def test_rclunk
     rc = RStyx::Message::Rclunk.new(:tag => 0x1234)
     bytes = rc.to_bytes
-    expect = "\x79\x34\x12"
+    assert_equal("ASCII-8BIT", bytes.encoding.name)
+    expect = "\x79\x34\x12".force_encoding("ASCII-8BIT")
     len = expect.length + 4
     packlen = [len].pack("V")
     expect = packlen + expect
@@ -876,6 +899,7 @@ class MessageTest < Test::Unit::TestCase
   def test_tremove
     tr = RStyx::Message::Tremove.new(:fid => 0xdeadbeef, :tag => 0x1234)
     bytes = tr.to_bytes
+    assert_equal("ASCII-8BIT", bytes.encoding.name)
     expect = "\x7a\x34\x12\xef\xbe\xad\xde".force_encoding("ASCII-8BIT")
     len = expect.length + 4
     packlen = [len].pack("V")
@@ -908,7 +932,8 @@ class MessageTest < Test::Unit::TestCase
   def test_rremove
     rr = RStyx::Message::Rremove.new(:tag => 0x1234)
     bytes = rr.to_bytes
-    expect = "\x7b\x34\x12"
+    assert_equal("ASCII-8BIT", bytes.encoding.name)
+    expect = "\x7b\x34\x12".force_encoding("ASCII-8BIT")
     len = expect.length + 4
     packlen = [len].pack("V")
     expect = packlen + expect
@@ -937,6 +962,7 @@ class MessageTest < Test::Unit::TestCase
   def test_tstat
     ts = RStyx::Message::Tstat.new(:fid => 0xdeadbeef, :tag => 0x1234)
     bytes = ts.to_bytes
+    assert_equal("ASCII-8BIT", bytes.encoding.name)
     expect = "\x7c\x34\x12\xef\xbe\xad\xde".force_encoding("ASCII-8BIT")
     len = expect.length + 4
     packlen = [len].pack("V")
@@ -981,6 +1007,7 @@ class MessageTest < Test::Unit::TestCase
     de.muid = "quux"
     rs = RStyx::Message::Rstat.new(:stat => de, :tag => 0x1234)
     bytes = rs.to_bytes
+    assert_equal("ASCII-8BIT", bytes.encoding.name)
     expect = "\x7d\x34\x12\x3e\x00\x3c\x00\x34\x12\xab\x90\x78\x56\x01\xef\xbe\xad\xde\xee\xee\xff\xc0\xce\xfa\xed\xfe\xf0\xde\xbc\x9a\xef\xbe\xad\xde\xbe\xba\xfe\xca\x10\x32\x54\x76\x98\xba\xdc\xfe\x03\x00foo\x03\x00bar\x03\x00baz\x04\x00quux".force_encoding("ASCII-8BIT")
     len = expect.length + 4
     packlen = [len].pack("V")
@@ -1046,6 +1073,7 @@ class MessageTest < Test::Unit::TestCase
     de.muid = "quux"
     tw = RStyx::Message::Twstat.new(:fid => 0x12345678, :stat => de, :tag => 0x1234)
     bytes = tw.to_bytes
+    assert_equal("ASCII-8BIT", bytes.encoding.name)
     expect = "\x7e\x34\x12\x78\x56\x34\x12\x3e\x00\x3c\x00\x34\x12\xab\x90\x78\x56\x01\xef\xbe\xad\xde\xee\xee\xff\xc0\xce\xfa\xed\xfe\xf0\xde\xbc\x9a\xef\xbe\xad\xde\xbe\xba\xfe\xca\x10\x32\x54\x76\x98\xba\xdc\xfe\x03\x00foo\x03\x00bar\x03\x00baz\x04\x00quux".force_encoding("ASCII-8BIT")
     len = expect.length + 4
     packlen = [len].pack("V")
@@ -1098,7 +1126,8 @@ class MessageTest < Test::Unit::TestCase
   def test_rwstat
     rw = RStyx::Message::Rwstat.new(:tag => 0x1234)
     bytes = rw.to_bytes
-    expect = "\x7f\x34\x12"
+    assert_equal("ASCII-8BIT", bytes.encoding.name)
+    expect = "\x7f\x34\x12".force_encoding("ASCII-8BIT")
     len = expect.length + 4
     packlen = [len].pack("V")
     expect = packlen + expect
