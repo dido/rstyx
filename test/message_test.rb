@@ -117,7 +117,7 @@ class MessageTest < Test::Unit::TestCase
     end
     assert(de2.dtype == 0x1234)
     assert(de2.dev == 0x567890ab)
-    q = RStyx::Message::Qid.new(0x01, 0xdeadbeef,0xfeedfacec0ffeeee)
+    #q = RStyx::Message::Qid.new(0x01, 0xdeadbeef,0xfeedfacec0ffeeee)
     assert(de2.qid.qtype == 0x01)
     assert(de2.qid.version == 0xdeadbeef)
     assert(de2.qid.path == 0xfeedfacec0ffeeee)
