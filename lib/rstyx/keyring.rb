@@ -438,7 +438,7 @@ EOS
     # See Inferno's keyring-auth(2) for more details on how this
     # should work.
     #
-    def self.auth(fd, role, info, algs, role)
+    def self.auth(fd, role, info, algs)
       res = basicauth(fd, info)
       setlinecrypt(fd, role, algs)
       return(res)
@@ -491,7 +491,7 @@ EOS
       val = str2big(sha1.digest)
       return(rsaverify(val, c.rsa, pk.pk))
     end
-<
+
     ##
     # Authentication information, includes private key (if any),
     # public key, certificate, CA public key, and DH parameters.
