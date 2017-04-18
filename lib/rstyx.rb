@@ -22,6 +22,7 @@
 # Main require -- should get everything ready for the user of the lib.
 #
 #
+require 'eventmachine'
 require 'rstyx/common'
 require 'rstyx/messages'
 require 'rstyx/errors'
