@@ -24,8 +24,6 @@
 
 require 'thread'
 require 'timeout'
-require 'rubygems'
-require 'eventmachine'
 
 module RStyx
 
@@ -36,76 +34,150 @@ module RStyx
     # assemble all inbound messages. 
     #
     module StyxClient
-      attr_accessor :sentmessages, :auth
+      include EventMachine::Deferrable
+      ##
+      # Pending messages sent awaiting replies
+      attr_accessor :sentmessages
+      ##
+      # Authenticator object
+      attr_accessor :auth
+      ##
+      # Message size for client
+      attr_accessor :msize
+      ##
+      # Used FIDs for the connection
+      attr_accessor :usedfids
 
       def post_init
+        # Initial message buffer
         @msgbuffer = "".force_encoding("ASCII-8BIT")
-        @lock = Mutex.new
-        @sentmessages = {}
-        @auth = nil
+        # Hash with sent messages indexed by tag
+        @sentmessages = Hash.new
+        # FIDs
+        @usedfids = Hash.new
+        @pendingclunks = Hash.new
+        @rpendingclunks = Hash.new
+        @uname = ENV['USER']
+        @aname = ""
+        # Begin handshaking process with remote server.
+        # 1. Send a Tversion message and check the response from the
+        #    remote Styx server.
+        tv = send_message(Message::Tversion.new(:msize => MSIZE,
+                                                :version => STYX_VERSION))
+        tv.callback do
+          rver = tv.response
+          if rver.version != STYX_VERSION
+            self.fail("Server uses unsupported Styx version #{rver.version}")
+          end
+          @msize = rver.msize
+          @version = rver.version
+          # 2. Attach to the remote server. XXX support authenticated
+          #    connections. Trouble is the Inferno servers don't use the
+          #    T/Rauth messages to do authentication so...
+          begin
+            rfid = newfid()
+            ta = send_message(Message::Tattach.new(:fid => rfid,
+                                                   :afid => NOFID,
+                                                   :uname => @uname,
+                                                   :aname => @aname))
+          rescue
+            self.fail($!.message)
+          end
+          ta.callback do
+            # Connection successful
+            @rootfid = rfid
+            self.succeed
+          end
+          ta.errback { |errmsg| self.fail(errmsg) }
+        end
+        tv.errback { |errmsg| self.fail(errmsg) }
+      end
+
+      ##
+      # Get a new FID
+      def newfid
+        fid = nil
+        0.upto(MAX_FID) do |i|
+          unless @usedfids.has_key?(i)
+            fid = i
+            break
+          end
+        end
+
+        if fid.nil?
+          raise StyxException.new("No more free fids")
+        end
+        @usedfids[fid] = true
+        return(fid)
+      end
+
+      ##
+      # Return a FID to the FID pool
+      def return_fid(fid)
+        @usedfids.delete(fid)
       end
 
       ##
       # Send a message asynchronously.
       #
       # +message+:: [StyxMessage] the message to be sent
-      # +block+:: [Proc] the callback to use
-      # return:: [Fixnum] the tag number used.
+      # return:: [StyxMessage] the message that was sent, possibly with tag
+      # filled in or changed.
       #
-      def send_message_async(message, &block)
+      def send_message(message)
         # store the message and callback indexed by tag
-        @lock.synchronize do
-          if message.tag.nil?
-            # If a tag has not been explicitly specified, get
-            # a new tag for the message. We use the current
-            # thread's object ID as the base and use what
-            # amounts to a linear probing algorithm to
-            # determine a new tag in case of collisions.
-            tag = Thread.current.object_id % MAX_TAG
-            while @sentmessages.has_key?(tag)
-              tag += 1
-            end
-            message.tag = tag
+        if message.tag.nil?
+          # If a tag has not been explicitly specified, get
+          # a new tag for the message. We use the message's own
+          # object ID as the base and use what amounts to a
+          # linear probing algorithm to determine a new tag in case
+          # of collisions.
+          tag = message.object_id % MAX_TAG
+          while @sentmessages.has_key?(tag)
+            tag = (tag + 1) % MAX_TAG
           end
-          @sentmessages[message.tag] = [message, block]
+          message.tag = tag
         end
+        @sentmessages[message.tag] = message
 
         DEBUG > 0 && puts(" >> #{message.to_s}")
         DEBUG > 1 && puts(" >> #{message.to_bytes.unpack("H*").inspect}")
+        # Send the message to our peer
         send_data(message.to_bytes)
-        return(message.tag)
+        return(message)
       end
 
       ##
-      # Send a message synchronously.  If an error occurs, a
-      # StyxException is raised.
-      #
-      # +message+:: The Styx message to send.
-      # +timeout+:: optional timeout for receiving the response.
-      #
-      def send_message(message, timeout=0)
-        # The queue here holds the response message, and is used
-        # to communicate with the receive_data thread, which ultimately
-        # calls the block passed to send_message_async.
-        queue = Queue.new
-        send_message_async(message) do |tx,rx|
-          # Enqueue the response message -- this runs in the
-          # receive_data thread
-          queue << rx
-        end
-        Timeout::timeout(timeout, StyxException.new("timeout waiting for a reply to #{message.to_s}")) do
-          # This will block until the queue contains something
-          resp = queue.shift
-          # Check the response to see if it is the response to
-          # the transmitted message.
-          if resp.class == Message::Rerror
-            raise StyxException.new("#{resp.ename}")
-          end
+      # Receive and process a Styx protocol message
+      def receive_message(styxmsg)
+        # Look for its tag in the hash of sent messages.
+        tmsg = @sentmessages.delete(styxmsg.tag)
 
-          if resp.ident != message.ident + 1
-            raise StyxException.new("Unexpected #{resp.to_s} received in response to #{message.to_s}")
+        if tmsg.nil?
+          # Ignore unrecognized messages.
+          DEBUG > 0 && puts(" << ERR discarded unsolicited message #{message.to_s}")
+          return
+        end
+ 
+        tmsg.response = styxmsg
+        case styxmsg.class
+        when Message::Rflush
+          # If we flushed a message by sending a Tflush ourselves
+          # then we should also fail the oldtag message and send
+          # the Rflush as its response.
+          if tmsg.is_a?(Message::Tflush)
+            otmsg = @sentmessages.delete(tmsg.oldtag)
+            otmsg.response = styxmsg
+            otmsg.fail("flushed message")
+            tmsg.succeed
+          else
+            # Fail the transmitted message if it was not a Tflush
+            tmsg.fail("peer flushed message")
           end
-          return(resp)
+        when Message::Rerror
+          tmsg.fail(styxmsg.ename)
+        else
+          tmsg.succeed
         end
       end
 
@@ -113,12 +185,6 @@ module RStyx
       # Receive data from the network connection, called by EventMachine.
       #
       def receive_data(data)
-        # If we are in authentication mode, write any data received
-        # into the @auth's buffer, and simply return.
-        unless @auth.authenticated?
-          @auth.receive_data(data)
-          return
-        end
         @msgbuffer << data
         DEBUG > 1 && puts(" << #{data.unpack("H*").inspect}")
         while @msgbuffer.length > 4
@@ -133,41 +199,12 @@ module RStyx
           message, @msgbuffer = @msgbuffer.unpack("a#{length}a*")
           styxmsg = Message::StyxMessage.from_bytes(message)
           DEBUG > 0 && puts(" << #{styxmsg.to_s}")
-          # and look for its tag in the hash of received messages
-          tmsg, cb = @lock.synchronize do
-            @sentmessages.delete(styxmsg.tag)
-          end
-
-          if tmsg.nil?
-            # Discard unrecognized messages.
-            next
-          end
-
-          if styxmsg.class == Message::Rflush
-            # We need to delete the oldtag as well, and send the
-            # rflush to the original sender if possible, so they
-            # don't wait forever.
-            if tmsg.respond_to?(:oldtag)
-              otmsg, ocb = @lock.synchronize do
-                @sentmessages.delete(tmsg.oldtag)
-              end
-            end
-
-            if !otmsg.nil? && !ocb.nil?
-              ocb.call(otmsg, styxmsg)
-            end
-          end
-
-          # Now, activate the callback block.
-          if !(tmsg.nil? || cb.nil?)
-            cb.call(tmsg, styxmsg)
-          end
-
+          receive_message(styxmsg)
           # after all this is done, there may still be enough data in
           # the message buffer for more messages so keep looping.
         end
         # If we get here, we don't have enough data in the buffer to
-        # build a new message.
+        # build a new message and we have to go back to the event loop.
       end
 
       ##
@@ -175,13 +212,77 @@ module RStyx
       #
       def disconnect
         # flush all outstanding messages before disconnect
-        sentmessages.each_key do |tag|
-          rflush = send_message(Message::Tflush.new(:oldtag => tag))
+        sentmessages.keys.each do |tag|
+          tf = send_message(Message::Tflush.new(:oldtag => tag))
+          tf.callback do
+            if sentmessages.length == 0
+              close_connection()
+              self.succeed
+            end
+          end
         end
-
-        EventMachine::stop_event_loop
+        if sentmessages.length == 0
+          close_connection()
+          self.succeed
+        end
+        return(self)
       end
 
+      ##
+      # Unbind handler. In this case, we manually send an Rflush
+      # reply and failure to all pending messages, if any.
+      def unbind
+        sentmessages.each_pair do |tag,msg|
+          msg.response = Message::Rflush.new
+          msg.fail("remote host closed connection")
+        end
+      end
+
+      ##
+      # Open a file on the Styx server. Asynchronous. Returns a File
+      # object, which is also a deferrable.
+      def open(path, mode="r", perm=0666)
+        file = File.new(self, path)
+        append = false
+        create = false
+        numeric_mode = nil
+        if mode.is_a?(Integer)
+          numeric_mode = mode
+        else
+          case mode.to_s
+          when "r"
+            numeric_mode = OREAD
+          when "r+"
+            numeric_mode = ORDWR
+          when "w"
+            numeric_mode = OTRUNC | OWRITE
+            create = true
+          when "w+"
+            numeric_mode = OTRUNC | ORDWR
+            create = true
+          when "a"
+            numeric_mode = OWRITE
+            append = true
+            create = true
+          when "a+"
+            numeric_mode = ORDWR
+            append = true
+            create = true
+          when "e"
+            numeric_mode = OEXEC
+          else
+            raise StyxException.new("invalid access mode #{mode}")
+          end
+        end
+
+        fp = file.open(numeric_mode, perm, create, &block)
+        if append
+          fp.callback do
+            fp.seek(0, 2)
+          end
+        end
+        return(fp)
+      end
     end                         # module StyxClient
 
     class Connection
