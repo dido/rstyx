@@ -252,8 +252,12 @@ module RStyx
 
     ##
     # Base class of a Styx message.
+    # Styx messages are deferrables, which succeed and fail based on
+    # the results of their transmission.
     #
     class StyxMessage
+      include EventMachine::Deferrable
+
       ##
       # A hash indexed by the field names giving the field values.
       #
@@ -263,6 +267,10 @@ module RStyx
       # number.
       #
       MESSAGE_IDS = {}
+
+      ##
+      # The response to the message, if available
+      attr_accessor :response
 
       ##
       # Add a field to the StyxMessage.  Used by subclasses to define
