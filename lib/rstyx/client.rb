@@ -54,7 +54,7 @@ module RStyx
         # Hash with sent messages indexed by tag
         @sentmessages = Hash.new
         # FIDs
-        @usedfids = Hash.new
+        @usedfids = []
         @pendingclunks = Hash.new
         @rpendingclunks = Hash.new
         @uname = ENV['USER']
@@ -73,7 +73,8 @@ module RStyx
           @version = rver.version
           # 2. Attach to the remote server. XXX support authenticated
           #    connections. Trouble is the Inferno servers don't use the
-          #    T/Rauth messages to do authentication so...
+          #    T/Rauth messages to do authentication so we have no samples
+          #    to try to do this.
           begin
             rfid = newfid()
             ta = send_message(Message::Tattach.new(:fid => rfid,
@@ -98,7 +99,7 @@ module RStyx
       def newfid
         fid = nil
         0.upto(MAX_FID) do |i|
-          unless @usedfids.has_key?(i)
+          unless @usedfids.include?(i)
             fid = i
             break
           end
@@ -107,7 +108,7 @@ module RStyx
         if fid.nil?
           raise StyxException.new("No more free fids")
         end
-        @usedfids[fid] = true
+        @usedfids << fid
         return(fid)
       end
 
@@ -123,6 +124,8 @@ module RStyx
       # +message+:: [StyxMessage] the message to be sent
       # return:: [StyxMessage] the message that was sent, possibly with tag
       # filled in or changed.
+      #
+      # DO NOT USE THIS METHOD TO SEND A TCLUNK DIRECTLY!
       #
       def send_message(message)
         # store the message and callback indexed by tag
@@ -148,7 +151,7 @@ module RStyx
       end
 
       ##
-      # Receive and process a Styx protocol message
+      # Receive and process a Styx protocol message.
       def receive_message(styxmsg)
         # Look for its tag in the hash of sent messages.
         tmsg = @sentmessages.delete(styxmsg.tag)
@@ -211,21 +214,40 @@ module RStyx
       # Disconnect from the remote server.
       #
       def disconnect
-        # flush all outstanding messages before disconnect
-        sentmessages.keys.each do |tag|
-          tf = send_message(Message::Tflush.new(:oldtag => tag))
-          tf.callback do
-            if sentmessages.length == 0
-              close_connection()
-              self.succeed
-            end
+        cdf = EventMachine::DefaultDeferrable.new
+        df = EventMachine::DefaultDeferrable.new
+        # Clunk all outstanding fids in reverse order so the root fid
+        # gets clunked last.
+        @usedfids.reverse_each do |fid|
+          c= tclunk(fid)
+          c.errback do |err|
+            # An error here is most likely a no such fid error. Return the
+            # fid manually in this case.
+            return_fid(c.fid)
+            cdf.succeed if @usedfids.length == 0
+          end
+          c.callback do
+            cdf.succeed if @usedfids.length == 0
           end
         end
-        if sentmessages.length == 0
-          close_connection()
-          self.succeed
+        cdf.succeed if @usedfids.length == 0
+        cdf.callback do
+          # flush all outstanding messages before final disconnect
+          @sentmessages.keys.each do |tag|
+            tf = send_message(Message::Tflush.new(:oldtag => tag))
+            tf.callback do
+              if @sentmessages.length == 0
+                close_connection()
+                df.succeed
+              end
+            end
+          end
+          if @sentmessages.length == 0
+            close_connection()
+            df.succeed
+          end
         end
-        return(self)
+        return(df)
       end
 
       ##
@@ -235,6 +257,26 @@ module RStyx
         sentmessages.each_pair do |tag,msg|
           msg.response = Message::Rflush.new
           msg.fail("remote host closed connection")
+        end
+      end
+
+      ##
+      # Clunk a fid. Use this method only to send Tclunk messages.
+      def tclunk(fid)
+        # If there is already a pending clunk, return the clunk message
+        # that was already sent.
+        if @rpendingclunks.has_key?(fid)
+          return(@rpendingclunks[fid])
+        end
+        clunk = Message::Tclunk.new(:fid => fid)
+        send_message(clunk)
+        @pendingclunks[clunk.tag] = fid
+        @rpendingclunks[fid] = clunk
+        clunk.callback do
+          # return the FID to the pool after clunk
+          fid = @pendingclunks.delete(clunk.tag)
+          @rpendingclunks.delete(clunk.fid)
+          return_fid(clunk.fid)
         end
       end
 
