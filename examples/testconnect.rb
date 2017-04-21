@@ -38,6 +38,7 @@ EventMachine::run do
     end
     c.errback do |err|
       puts "Error connecting #{err}"
+      EventMachine::stop_event_loop
     end
   end
 end
