@@ -23,18 +23,46 @@
 #
 require 'rstyx'
 
-HOST = "localhost"
-PORT = 9876
+serv = ARGV[0]
+serv ||= "tcp!localhost!9876"
+filename = ARGV[1]
+filename ||= "test.txt"
 
 module RStyx
   DEBUG = 1
 end
 
 EventMachine::run do
-  EventMachine.connect(HOST, PORT, RStyx::Client::StyxClient) do |c|
+   RStyx::Client::connect(serv) do |c|
     c.callback do
-      puts "Connection to #{HOST}!#{PORT} successful"
-      c.disconnect.callback { EventMachine::stop_event_loop }
+      puts "Connection to #{serv} successful\nOpening #{filename}"
+      fp = c.open(filename)
+      fp.callback do
+        puts "Opened #{filename}. Stat."
+        s=fp.astat
+        s.callback do
+          puts "Stat: #{s.response.stat}\nDisconnecting."
+          df=c.disconnect
+          df.callback { EventMachine::stop_event_loop }
+          df.errback do |err|
+            puts "Error closing #{err}"
+            EventMachine::stop_event_loop
+          end
+        end
+        s.errback do |err|
+          puts "Error: #{err}"
+          EventMachine::stop_event_loop
+        end
+      end
+
+      fp.errback do |err|
+        puts "Error: #{err}"
+        EventMachine::stop_event_loop
+      end
+      c.errback do |err|
+        puts "Error closing. #{err}"
+        EventMachine::stop_event_loop
+      end
     end
     c.errback do |err|
       puts "Error connecting #{err}"
