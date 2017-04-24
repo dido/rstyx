@@ -19,7 +19,8 @@
 #
 #----------------------------------------------------------------------------
 #
-# Test connections
+# Test connections. Rather unwieldy direct use of the library's evented
+# callback API.
 #
 require 'rstyx'
 
@@ -41,12 +42,20 @@ EventMachine::run do
         puts "Opened #{filename}. Stat."
         s=fp.astat
         s.callback do
-          puts "Stat: #{s.response.stat}\nDisconnecting."
-          df=c.disconnect
-          df.callback { EventMachine::stop_event_loop }
-          df.errback do |err|
-            puts "Error closing #{err}"
+          puts "Stat: #{s.response.stat}\nReading."
+          r=fp._asysread(fp.iounit, 0)
+          r.errback do |err|
+            puts "Error reading #{err}"
             EventMachine::stop_event_loop
+          end
+          r.callback do |data|
+            puts "Data read: #{data}"
+            df=c.disconnect
+            df.callback { EventMachine::stop_event_loop }
+            df.errback do |err|
+              puts "Error closing #{err}"
+              EventMachine::stop_event_loop
+            end
           end
         end
         s.errback do |err|
