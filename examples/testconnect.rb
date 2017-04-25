@@ -23,6 +23,7 @@
 # callback API.
 #
 require 'rstyx'
+require 'digest/sha1'
 
 serv = ARGV[0]
 serv ||= "tcp!localhost!9876"
@@ -43,13 +44,13 @@ EventMachine::run do
         s=fp.astat
         s.callback do
           puts "Stat: #{s.response.stat}\nReading."
-          r=fp._asysread(fp.iounit, 0)
+          r=fp._sysread
           r.errback do |err|
             puts "Error reading #{err}"
             EventMachine::stop_event_loop
           end
-          r.callback do |data|
-            puts "Data read: #{data}"
+          r.callback do |data, offset|
+            puts "To offset #{offset} digest: #{Digest::SHA1.hexdigest(data)} data read:\n#{data}"
             df=c.disconnect
             df.callback { EventMachine::stop_event_loop }
             df.errback do |err|
@@ -66,10 +67,6 @@ EventMachine::run do
 
       fp.errback do |err|
         puts "Error: #{err}"
-        EventMachine::stop_event_loop
-      end
-      c.errback do |err|
-        puts "Error closing. #{err}"
         EventMachine::stop_event_loop
       end
     end
