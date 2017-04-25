@@ -482,6 +482,51 @@ module RStyx
       end
 
       ##
+      # Read +size+ bytes from +offset+. Returns a new deferrable,
+      # which succeeds and is passed the data read and the offset at which
+      # the last read finished, or fails with the error message.  If the size
+      # argument is negative or omitted, read until EOF. The reads
+      # performed are sequential. Should probably not be used directly.
+      #
+      # +size+:: number of bytes to read from the file
+      # +offset+:: the offset to read from.
+      # return:: Deferrable
+      def _sysread(size=-1, offset=0)
+        srdf = EventMachine::DefaultDeferrable.new
+        bytes_to_read = size
+        data = "".force_encoding("ASCII-8BIT")
+        asrcb = lambda do |rdata|
+          unless rdata.nil?
+            if rdata.length == 0
+              srdf.succeed(data, offset) # EOF
+              next
+            end
+            offset += rdata.length
+            data << rdata
+            if size >= 0
+              bytes_to_read -= rdata.length
+            end
+          end
+          if size < 0 || bytes_to_read > @iounit
+            n = @iounit
+          elsif bytes_to_read <= 0
+            srdf.succeed(data, offset)
+            next
+          else
+            n = bytes_to_read
+          end
+          asr = _asysread(n, offset)
+          asr.callback(&asrcb)
+          asr.errback { |err| srdf.fail(err) }
+        end
+        # initiate the loop by passing nil
+        asrcb.call(nil)
+        return(srdf)
+      end
+
+      private
+
+      ##
       # Read at most +size+ bytes or up to iounit. Returns a new
       # Deferrable, which succeeds when the Rread is received, or
       # fails on an Rerror. Will return zero size responses on
@@ -497,44 +542,6 @@ module RStyx
         tr.callback { df.succeed(tr.response.data) }
         tr.errback { |err| df.fail(err) }
         return(df)
-      end
-
-      private
-
-      ##
-      # Read at most +size+ bytes from +offset+
-      # If the size argument is negative or omitted, read until EOF.
-      # This should probably not be used directly.
-      #
-      # +size+:: number of bytes to read from the file
-      # +offset+:: the offset to read from.
-      # return:: the data followed by the new offset
-      #
-      def _sysread(size=-1, offset=0)
-        contents = ""
-        bytes_to_read = size
-        loop do
-          if size < 0 || bytes_to_read > @iounit
-            n = @iounit
-          elsif bytes_to_read <= 0
-            break
-          else
-            n = bytes_to_read
-          end
-          rread =
-            @conn.send_message(Message::Tread.new(:fid => @fid,
-                                                  :offset => offset,
-                                                  :count => n))
-          if rread.data.length == 0
-            break                 # EOF
-          end
-          offset += rread.data.length
-          contents << rread.data
-          if size >= 0
-            bytes_to_read -= rread.data.length
-          end
-        end
-        return([contents, offset])
       end
 
       ##
