@@ -50,6 +50,9 @@ module RStyx
       ##
       # Root FID
       attr_accessor :rootfid
+      ##
+      # Umask
+      attr_accessor :umask
 
       def post_init
         # Initial message buffer
@@ -62,6 +65,7 @@ module RStyx
         @rpendingclunks = Hash.new
         @uname = ENV['USER']
         @aname = ""
+        @umask = ::File.umask
         @rootfid = nil
         # Begin handshaking process with remote server.
         # 1. Send a Tversion message and check the response from the
@@ -285,7 +289,7 @@ module RStyx
       # Open a file on the Styx server. Asynchronous. Returns a File
       # object, which is also a deferrable.
       def open(path, mode="r", perm=0666)
-        file = File.new(self, path)
+        file = AsyncFile.new(self, path)
         append = false
         create = false
         numeric_mode = nil
@@ -318,7 +322,7 @@ module RStyx
           end
         end
 
-        fp = file.aopen(numeric_mode, perm, create)
+        fp = file.open(numeric_mode, perm, create)
 #        if append
 #          fp.callback do
 #            fp.seek(0, 2)
@@ -349,7 +353,7 @@ module RStyx
     # Goto Yuuzou, but modified a bit to provide for offset
     # handling.
     #
-    class File
+    class AsyncFile
       include Enumerable, EventMachine::Deferrable
 
       attr_reader :conn, :path
@@ -386,7 +390,7 @@ module RStyx
       # +create+:: should we create the file if it doesn't exist?
       # Returns:: Self. Attach any callbacks/errbacks to it.
       #
-      def aopen(mode, perm, create)
+      def open(mode, perm, create)
         dfid = @conn.newfid
         basename = ::File.basename(@path)
         dirname = ::File.dirname(@path)
@@ -409,34 +413,46 @@ module RStyx
           twalk = Message::Twalk.new(:fid => dfid, :newfid => fid)
           twalk.path = basename
           @conn.send_message(twalk)
-          twalk.errback do |err|
-            # XXX -- file creation
-            self.fail(err)
+          # Open/Create callback. Passed either a Topen or a Tcreate message
+          # with its response filled in.
+          occb = lambda do |resp|
+            cl=@conn.tclunk(dfid)
+            cl.callback do
+              # If we get here, we were able to successfully open or create
+              # the file.
+              @mode = mode
+              @fid = fid
+              @qid = resp.qid
+              @iounit = resp.iounit
+              # XXX: Determine if the file is actually a directory.  Such a
+              # file would have its Qid.qtype high bit set to 1. In this
+              # case, instead of passing back self, we should pass a
+              # Directory object.
+              self.succeed(self)
+            end
+            cl.errback { |err| self.fail(err) }
           end
           twalk.callback do
-            topen = @conn.send_message(Message::Topen.new(:fid => fid, :mode => mode))
-            topen.callback do
-              ropen = topen.response
-              cl=@conn.tclunk(dfid)
-              cl.callback do
-                # If we get here, we were able to successfully open or create
-                # the file.
-                @mode = mode
-                @fid = fid
-                @qid = ropen.qid
-                @iounit = ropen.iounit
-                # XXX: Determine if the file is actually a directory.  Such a
-                # file would have its Qid.qtype high bit set to 1. In this
-                # case, instead of passing back self, we should pass a
-                # Directory object.
-                self.succeed(self)
-              end
-              cl.errback { |err| self.fail(err) }
-            end
-
-            topen.errback do |err|
-              # XXX -- file creation
-              self.fail(err)
+            # On success, just open the file by sending a Topen. Use the
+            # occb to handle the resulting Ropen.
+            topen = @conn.send_message(Message::Topen.new(:fid => fid,
+                                                          :mode => mode))
+            topen.callback { occb.call(topen.response) }
+            topen.errback { |err| self.fail(err) }
+          end
+          twalk.errback do |err|
+            # If we are being directed to create the file if it doesn't
+            # already exist, send a Tcreate message, and on success pass
+            # it to occb.
+            if create
+              perm &= ~(@conn.umask)
+              tcreate = Message::Tcreate.new(:fid => dfid,
+                                             :name => basename,
+                                             :perm => perm,
+                                             :mode => mode)
+              tcreate = @conn.send_message(tcreate)
+              tcreate.callback { occb.call(tcreate.response) }
+              tcreate.errback { |err| self.fail(err) }
             end
           end
         end
@@ -449,15 +465,16 @@ module RStyx
       # returns: self, callback returns the RStyx::Message::Stat instance
       # corresponding to the file.
       #
-      def astat
+      def stat
         return(@conn.send_message(Message::Tstat.new(:fid => @fid)))
       end
 
       ##
       # Close the file.  XXX: This should flush all unwritten buffered data
-      # if any. Uses self as a deferrable.
+      # if any. Uses the clunk as the deferrable, or a deferrable that
+      # automatically succeeds if the file is already closed.
       #
-      def aclose
+      def close
         if @fid >= 0
           # Clunk the fid
           clunk = @conn.tclunk(@fid)
@@ -465,20 +482,21 @@ module RStyx
             @fid = -1
             @iounit = 0
             @mode = -1
-            self.succeed(self)
           end
           clunk.errback do |err|
             @fid = -1
             @iounit = 0
             @mode = -1
-            self.fail(err)
           end
+          return(clunk)
         end
-        self.succeed(self)
+        df = EventMachine::DefaultDeferrable.new
+        df.succeed
+        return(df)
       end
 
       def closed?
-        return(@mode < 0)
+        return(@fid < 0)
       end
 
       ##
@@ -491,7 +509,7 @@ module RStyx
       # +size+:: number of bytes to read from the file
       # +offset+:: the offset to read from.
       # return:: Deferrable
-      def _sysread(size=-1, offset=0)
+      def sysread(size=-1, offset=0)
         srdf = EventMachine::DefaultDeferrable.new
         bytes_to_read = size
         data = "".force_encoding("ASCII-8BIT")
@@ -522,6 +540,24 @@ module RStyx
         # initiate the loop by passing nil
         asrcb.call(nil)
         return(srdf)
+      end
+
+      ##
+      # Write +data+ at +offset+, up to iounit bytes. Returns a new
+      # Deferrable, which succeeds when the Rwrite is received, or
+      # fails on an Rerror.
+      def _asyswrite(data, offset)
+        df = EventMachine::DefaultDeferrable.new
+        # Truncate
+        if data.length > @iounit
+          data = data[0,@iounit]
+        end
+        tw = @conn.send_message(Message::Twrite.new(:fid => @fid,
+                                                    :offset => offset,
+                                                    :data => data))
+        tw.callback { df.succeed(tw.response.count) }
+        tw.errback { |err| df.fail(err) }
+        return(df)
       end
 
       private
@@ -603,30 +639,6 @@ module RStyx
       end
 
       public
-
-      ##
-      # Read at most +size+ bytes from the Styx file or to the end of
-      # file if omitted.  Returns nil if called at end of file.
-      #
-      def read(size=-1)
-        until @eof
-          # Fill up the buffer until we have at least the requested
-          # size, or until end of file if size is negative.
-          if size > 0 && size <= @rbuffer.size
-            break
-          end
-          fill_rbuff
-        end
-
-        # We managed to slurp the entire file!
-        if size < 0
-          size = @rbuffer.size
-        end
-
-        @offset += size
-        retval = consume_rbuff(size) || ""
-        (size && retval.empty?) ? nil : retval
-      end
 
       ##
       # Reads the next "line" from the Styx file; lines are separated by
@@ -729,7 +741,7 @@ module RStyx
         # 2. The write buffer size has equalled or exceeded the connection's
         #    iounit.
         # 3. The write buffer now contains an end of line marker, in which
-        #    cas we flush only until the end of line marker.
+        #    case we flush only until the end of line marker.
         #
         if @sync || @wbuffer.size >= @iounit || (idx = @wbuffer.rindex($/))
           remain = idx ? idx + $/.size : @wbuffer.length
@@ -834,19 +846,6 @@ module RStyx
       end
 
       ##
-      # Reads +size+ bytes from the Styx file and returns them as a string.
-      # Do not mix with other methods that read from the Styx file or you
-      # may get unpredictable results.
-      #
-      def sysread(size=-1)
-        data, @offset = _sysread(size, @offset)
-        if data.length == 0
-          return(nil)
-        end
-        return(data)
-      end
-
-      ##
       # Writes +data+ to the Styx file.  Returns the number of bytes written.
       # do not mix with other methods that write to the Styx file or you
       # may get unpredictable results.
@@ -855,7 +854,7 @@ module RStyx
         return(count)
       end
 
-    end                         # class File
+    end                         # class AsyncFile
 
     ##
     # Styx directory.  This obtains the entries inside a directory, and
