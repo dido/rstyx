@@ -424,11 +424,15 @@ module RStyx
               @fid = fid
               @qid = resp.qid
               @iounit = resp.iounit
-              # XXX: Determine if the file is actually a directory.  Such a
+              # Determine if the file is actually a directory.  Such a
               # file would have its Qid.qtype high bit set to 1. In this
               # case, instead of passing back self, we should pass a
               # Directory object.
-              self.succeed(self)
+              if twalk.wnames.length == 0 || twalk.response.qids[-1].qtype & 0x80 != 0
+                self.succeed(AsyncDirectory.new(self))
+              else
+                self.succeed(self)
+              end
             end
             cl.errback { |err| self.fail(err) }
           end
@@ -857,18 +861,15 @@ module RStyx
     end                         # class AsyncFile
 
     ##
-    # Styx directory.  This obtains the entries inside a directory, and
-    # works by delegating to File.
+    # Styx directory.  This decodes the entries in a directory and allows
+    # reading of file names.
     #
-    class Directory
-      include Enumerable
-
+    class AsyncDirectory
       def initialize(fp)
         @io = fp
         # directory entry buffer
-        @read_direntries = []
         # byte buffer
-        @data = ""
+        self.rewind
       end
 
       def close
@@ -883,60 +884,61 @@ module RStyx
         @io.qid
       end
 
+
+      def rewind
+        @pos = 0
+        @data = ""
+        @read_direntries = []
+      end
+
       ##
-      # Read the next directory entry from the dir and return the file
-      # name as a string.  Returns nil at the end of stream.
+      # Read the next directory Qid from the dir. Returns a deferrable.
+      # Succeeds when the next directory entry is available.
       #
       def read
+        df = EventMachine::DefaultDeferrable.new
         # if there are directory entries left over from the previous
         # read that have not yet been returned, return them.
         if @read_direntries.length != 0
-          return(@read_direntries.shift.name)
+          df.succeed(@read_direntries.shift)
+          return(df)
         end
         # read iounit bytes from the directory--this must be unbuffered
-        d = @io.sysread
-        if d.nil?
-          return(nil)
-        end
-        @data << d
-
-        if (@data.empty?)
-          return(nil)
-        end
-
-        # decode the directory entries in the iounit
-        loop do
-          delen = @data.unpack("v")[0]
-          if delen.nil? || delen + 1 > @data.length
-            break
+        d = @io.sysread(@io.iounit, @pos)
+        d.errback { |err| df.fail(err) }
+        d.callback do |data|
+          # If no more data is readable from the directory
+          if data.nil? || data.empty?
+            df.succeed(nil)
+            next
           end
-          edirent = @data[0..(delen + 1)]
-          @data = @data[(delen + 2)..-1]
-          @read_direntries << Message::Stat.from_bytes(edirent)
+
+          @pos += data.length
+
+          @data << data
+
+          if (@data.empty?)
+            df.succeed(nil)
+            next
+          end
+
+          # decode the directory entries in the iounit
+          loop do
+            delen = @data.unpack("v")[0]
+            if delen.nil? || delen + 1 > @data.length
+              break
+            end
+            edirent = @data[0..(delen + 1)]
+            @data = @data[(delen + 2)..-1]
+            @read_direntries << Message::Stat.from_bytes(edirent)
+          end
+          # succeed and return the first
+          df.succeed(@read_direntries.shift)
         end
-        de = @read_direntries.shift
-        if (de.nil?)
-          return(nil)
-        end
-        return(de.name)
+        return(df)
       end
 
-      ##
-      # Call the block once for each entry in the directory, passing
-      # the filename of each entry as a parameter to the block.
-      #
-      def each
-        if !block_given?
-          raise LocalJumpError.new("no block given")
-        end
-
-        self.rewind
-        until (de = read).nil?
-          yield de
-        end
-      end
-
-    end                         # class Directory
+    end                         # class AsyncDirectory
 
   end                           # module Client
 
