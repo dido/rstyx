@@ -35,44 +35,46 @@ module RStyx
 end
 
 EventMachine::run do
-   RStyx::Client::connect(serv) do |c|
-    c.callback do
+  f = Fiber.new do
+    RStyx::Client::connect(serv) do |c|
+      c.callback { f.resume }
+      c.errback do |err|
+        puts "Error connecting #{err}"
+        EventMachine::stop_event_loop
+      end
+      Fiber.yield
       puts "Connection to #{serv} successful\nOpening #{filename}"
       fp = c.open(filename)
-      fp.callback do
-        puts "Opened #{filename}. Stat."
-        s=fp.astat
-        s.callback do
-          puts "Stat: #{s.response.stat}\nReading."
-          r=fp._sysread
-          r.errback do |err|
-            puts "Error reading #{err}"
-            EventMachine::stop_event_loop
-          end
-          r.callback do |data, offset|
-            puts "To offset #{offset} digest: #{Digest::SHA1.hexdigest(data)} data read:\n#{data}"
-            df=c.disconnect
-            df.callback { EventMachine::stop_event_loop }
-            df.errback do |err|
-              puts "Error closing #{err}"
-              EventMachine::stop_event_loop
-            end
-          end
-        end
-        s.errback do |err|
-          puts "Error: #{err}"
-          EventMachine::stop_event_loop
-        end
-      end
-
+      fp.callback { f.resume }
       fp.errback do |err|
         puts "Error: #{err}"
         EventMachine::stop_event_loop
       end
-    end
-    c.errback do |err|
-      puts "Error connecting #{err}"
-      EventMachine::stop_event_loop
+      Fiber.yield
+      puts "Opened #{filename}. Stat."
+      s=fp.stat
+      s.callback { |stat| f.resume(stat) }
+      s.errback do |err|
+        puts "Error: #{err}"
+        EventMachine::stop_event_loop
+      end
+      stat = Fiber.yield
+      puts "Stat: #{s.response.stat}\nReading."
+      r=fp.sysread
+      r.errback do |err|
+        puts "Error reading #{err}"
+        EventMachine::stop_event_loop
+      end
+      r.callback { |data, offset| f.resume([data, offset]) }
+      data, offset = Fiber.yield
+      puts "To offset #{offset} digest: #{Digest::SHA1.hexdigest(data)} data read:\n#{data}"
+      df=c.disconnect
+      df.callback { EventMachine::stop_event_loop }
+      df.errback do |err|
+        puts "Error closing #{err}"
+        EventMachine::stop_event_loop
+      end
     end
   end
+  f.resume
 end
