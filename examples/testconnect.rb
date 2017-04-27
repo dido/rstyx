@@ -67,11 +67,19 @@ EventMachine::run do
       end
       r.callback { |data, offset| f.resume([data, offset]) }
       data, offset = Fiber.yield
-      puts "To offset #{offset} digest: #{Digest::SHA1.hexdigest(data)} data read:\n#{data}"
+      puts "To offset #{offset} digest: #{Digest::SHA1.hexdigest(data)} data read:\n#{data}\nClosing file.\n"
+      df=fp.close
+      df.callback { f.resume }
+      df.errback do |err|
+        puts "Error closing: #{err}"
+        EventMachine::stop_event_loop
+      end
+      Fiber.yield
+      puts "Disconnecting."
       df=c.disconnect
       df.callback { EventMachine::stop_event_loop }
       df.errback do |err|
-        puts "Error closing #{err}"
+        puts "Error disconnecting #{err}"
         EventMachine::stop_event_loop
       end
     end
